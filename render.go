@@ -76,6 +76,13 @@ func renderCell(info cellInfo, hl cellHighlight, qubit int) (top, mid, bot strin
 		dashL := (innerW - 1) / 2
 		dashR := innerW - dashL - 1
 
+		if info.isBarrier {
+			top = vertRow
+			mid = bdr.Render("║") + strings.Repeat("─", dashL) + "│" + strings.Repeat("─", dashR) + bdr.Render("║")
+			bot = vertRow
+			return
+		}
+
 		top = bdr.Render("╔" + strings.Repeat("═", innerW) + "╗")
 		bot = bdr.Render("╚" + strings.Repeat("═", innerW) + "╝")
 
@@ -109,7 +116,12 @@ func renderCell(info cellInfo, hl cellHighlight, qubit int) (top, mid, bot strin
 	dashL := (cellW - 1) / 2
 	dashR := cellW - dashL - 1
 
-	if info.gate != nil {
+	if info.isBarrier {
+		top = vertRow
+		mid = strings.Repeat("─", dashL) + "│" + strings.Repeat("─", dashR)
+		bot = vertRow
+
+	} else if info.gate != nil {
 		if info.isControl {
 			top = emptyRow
 			if info.vertAbove {
@@ -166,7 +178,6 @@ func renderCell(info cellInfo, hl cellHighlight, qubit int) (top, mid, bot strin
 			}
 
 		} else if info.gate.Type == "MEASURE" {
-			// MEASURE gate with box — ║ starts below the box (in the next qubit's top line)
 			margin := (cellW - gateBoxW) / 2
 			rightMargin := cellW - margin - gateBoxW
 			top = strings.Repeat(" ", margin) + gateStyle.Render("┌"+strings.Repeat("─", gateNameW)+"┐") + strings.Repeat(" ", rightMargin)
@@ -174,7 +185,6 @@ func renderCell(info cellInfo, hl cellHighlight, qubit int) (top, mid, bot strin
 			bot = strings.Repeat(" ", margin) + gateStyle.Render("└"+strings.Repeat("─", gateNameW)+"┘") + strings.Repeat(" ", rightMargin)
 
 		} else {
-			// Single-qubit gate with box
 			margin := (cellW - gateBoxW) / 2
 			rightMargin := cellW - margin - gateBoxW
 			name := padCenter(gateDisplayName(info.gate.Type), gateNameW)
@@ -238,9 +248,7 @@ func (m Model) renderCircuitPanel(width, height int) string {
 		startStep = m.cursorStep - maxSteps + 1
 	}
 
-	totalSteps := m.circuit.MaxSteps + 1
-	displaySteps := min(maxSteps, totalSteps-startStep)
-	displaySteps = max(displaySteps, 1)
+	displaySteps := maxSteps
 
 	if startStep > 0 {
 		fmt.Fprintf(&sb, "  ◀ showing steps %d–%d\n", startStep, startStep+displaySteps-1)
