@@ -15,6 +15,7 @@ type focus int
 
 const (
 	focusCircuit focus = iota
+	focusProbabilities
 	focusQASM
 	focusMenu
 	focusSelectTarget
@@ -55,6 +56,8 @@ type Model struct {
 	editMenuIdx    int   // selected option in edit menu
 	editOrigStep   int   // step of the gate being edited
 	editControlIdx int   // which control index is being edited (-1 for single Control field)
+
+	// Probabilities state (nothing specific needed yet)
 }
 
 func initialModel() Model {
@@ -256,8 +259,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case "q":
 				return m, tea.Quit
 			case "tab":
-				m.focus = focusQASM
-				m.qasmEditor.Focus()
+				m.focus = focusProbabilities
 			case "ctrl+r":
 				m.circuit.Gates = nil
 				m.circuit.MaxSteps = 0
@@ -328,6 +330,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.editOrigStep = m.cursorStep
 					m.focus = focusEditGate
 				}
+			}
+
+		case focusProbabilities:
+			switch key {
+			case "tab":
+				m.focus = focusQASM
+				m.qasmEditor.Focus()
 			}
 
 		case focusMenu:
@@ -728,32 +737,50 @@ func (m Model) View() string {
 		return "Loading..."
 	}
 
+	panelOverhead := 4
+	controlsContent := 1
+	controlsOverhead := 2
+	leftColumnOverhead := panelOverhead * 2
+
+	availableHeight := m.height - controlsContent - controlsOverhead - leftColumnOverhead
+
+	// Calculate state panel height based on number of non-zero states plus some overhead for title and top state
+	// We'll cap it at 8 states to not take up too much vertical room, since we only show max 16 anyway
+	stateHeight := 8 + 5 // 8 max states + title + spacing + top state
+
+	circuitHeight := availableHeight - stateHeight
+	if circuitHeight < 1 {
+		circuitHeight = 1
+	}
+	if stateHeight < 1 {
+		stateHeight = 1
+	}
+
 	qasmWidth := m.width / 3
-	circuitWidth := m.width - qasmWidth - 4
-	controlsHeight := 6
-	circuitHeight := max(m.height-controlsHeight-2, 6)
+	if qasmWidth < 30 {
+		qasmWidth = 30
+	}
+	leftWidth := m.width - qasmWidth - 6
 
-	circuitPanel := m.renderCircuitPanel(circuitWidth, circuitHeight)
-	qasmPanel := m.renderQASMPanel(qasmWidth, circuitHeight)
-	controlsPanel := m.renderControlsPanel(m.width-4, controlsHeight-2)
+	circuitPanel := m.renderCircuitPanel(leftWidth, circuitHeight)
+	statePanel := m.renderStatePanel(leftWidth, stateHeight)
+	qasmPanel := m.renderQASMPanel(qasmWidth, availableHeight)
+	controlsPanel := m.renderControlsPanel(m.width-4, controlsContent)
 
-	topRow := lipgloss.JoinHorizontal(lipgloss.Top, circuitPanel, qasmPanel)
+	leftColumn := lipgloss.JoinVertical(lipgloss.Left, circuitPanel, statePanel)
+	topRow := lipgloss.JoinHorizontal(lipgloss.Top, leftColumn, qasmPanel)
 	frame := lipgloss.JoinVertical(lipgloss.Left, topRow, controlsPanel)
 
-	// Render menu overlay when in menu mode
 	if m.focus == focusMenu {
 		menuBox := m.renderMenu()
-		// Position menu near cursor or center it
 		frame = overlayAt(frame, menuBox, 2, 2)
 	}
 
-	// Render parameter input overlay
 	if m.focus == focusInputParam {
 		paramBox := m.renderParamInput()
 		frame = overlayAt(frame, paramBox, 2, 2)
 	}
 
-	// Render edit gate menu overlay
 	if m.focus == focusEditGate {
 		editBox := m.renderEditGateMenu()
 		frame = overlayAt(frame, editBox, 2, 2)

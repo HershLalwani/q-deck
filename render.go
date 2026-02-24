@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"math"
 	"strings"
 )
 
@@ -362,14 +363,26 @@ func (m Model) renderQASMPanel(width, height int) string {
 func (m Model) renderControlsPanel(width, height int) string {
 	var sb strings.Builder
 
-	sb.WriteString(activeGateStyle.Render("Navigate: "))
-	sb.WriteString("↑↓/jk Move qubit  ←→/hl Move step  +/- Qubits")
-	sb.WriteString("    ")
-	sb.WriteString(activeGateStyle.Render("a"))
-	sb.WriteString(" Add gate\n")
-
-	sb.WriteString(activeGateStyle.Render("Actions:  "))
-	sb.WriteString("Tab Switch focus  Bksp Delete  ^R Reset  ^S Save  q/^C Quit")
+	switch m.focus {
+	case focusProbabilities:
+		sb.WriteString(activeGateStyle.Render("Probabilities:"))
+		sb.WriteString("  ")
+		sb.WriteString(activeGateStyle.Render("Tab"))
+		sb.WriteString(" Next pane  ")
+		sb.WriteString(activeGateStyle.Render("q"))
+		sb.WriteString(" Quit")
+	default:
+		sb.WriteString(activeGateStyle.Render("Nav:"))
+		sb.WriteString(" ↑↓/jk Qubit ←→/hl Step +/- Qubits  ")
+		sb.WriteString(activeGateStyle.Render("a"))
+		sb.WriteString(" Add gate  ")
+		sb.WriteString(activeGateStyle.Render("Tab"))
+		sb.WriteString(" Focus  ")
+		sb.WriteString(activeGateStyle.Render("Bksp"))
+		sb.WriteString(" Del  ")
+		sb.WriteString(activeGateStyle.Render("q"))
+		sb.WriteString(" Quit")
+	}
 
 	return controlsStyle.Width(width).Height(height).Render(sb.String())
 }
@@ -474,4 +487,120 @@ func visibleLen(s string) int {
 		n++
 	}
 	return n
+}
+
+// ──────────────────────────── Probability Rendering ────────────────────────────
+
+func renderProbabilities(states []QSphereState, numQubits int, width int) string {
+	var sb strings.Builder
+
+	// We want to draw a bar chart for the probability of each basis state
+	barWidth := width - 30 // leaves room for "|00⟩: 1.00 "
+	if barWidth < 10 {
+		barWidth = 10
+	}
+
+	// Sort states by basis state to display in order (00, 01, 10, 11...)
+	// Or we could display all possible 2^N states, but that's too big for N>4
+	// Let's just show the non-zero states (which QSphereState already is)
+	// sorted by BasisState.
+	// But actually for up to 4 qubits (16 states), it might be nice to show all
+	// non-zero states, sorted by probability descending.
+
+	// Copy and sort by descending probability
+	sortedStates := make([]QSphereState, len(states))
+	copy(sortedStates, states)
+
+	for i := 0; i < len(sortedStates); i++ {
+		for j := i + 1; j < len(sortedStates); j++ {
+			if sortedStates[j].Prob > sortedStates[i].Prob {
+				sortedStates[i], sortedStates[j] = sortedStates[j], sortedStates[i]
+			}
+		}
+	}
+
+	// Display up to min(len(sortedStates), 16) states
+	maxStates := len(sortedStates)
+	if maxStates > 16 {
+		maxStates = 16
+	}
+
+	for i := 0; i < maxStates; i++ {
+		s := sortedStates[i]
+
+		fillCount := int(math.Round(s.Prob * float64(barWidth)))
+		if fillCount < 0 {
+			fillCount = 0
+		}
+		if fillCount > barWidth {
+			fillCount = barWidth
+		}
+		emptyCount := barWidth - fillCount
+
+		bar := strings.Repeat("█", fillCount) + strings.Repeat("░", emptyCount)
+
+		stateStr := formatBasisState(s.BasisState, numQubits)
+
+		sb.WriteString(fmt.Sprintf("%s: P=%4.2f [%s]\n",
+			stateStr, s.Prob, activeGateStyle.Render(bar)))
+	}
+
+	if len(sortedStates) > 16 {
+		sb.WriteString(dimStyle.Render(fmt.Sprintf("... and %d more states with low probability\n", len(sortedStates)-16)))
+	}
+
+	return sb.String()
+}
+
+func formatBasisState(state int, numQubits int) string {
+	result := make([]byte, numQubits)
+	for i := 0; i < numQubits; i++ {
+		if state&(1<<(numQubits-1-i)) != 0 {
+			result[i] = '1'
+		} else {
+			result[i] = '0'
+		}
+	}
+	return "|" + string(result) + "⟩"
+}
+
+func (m Model) renderStatePanel(width, height int) string {
+	var sb strings.Builder
+	title := "Probabilities"
+	if m.focus == focusProbabilities {
+		title = activeGateStyle.Render("Probabilities [ACTIVE]")
+	}
+	sb.WriteString(titleStyle.Render(title))
+	sb.WriteString("\n\n")
+
+	state := SimulateCircuit(&m.circuit, m.cursorStep)
+
+	numQubits := m.circuit.NumQubits
+	if numQubits == 0 {
+		numQubits = m.dag.NumQubits
+	}
+
+	qsphereStates := state.GetQSphereStates()
+	probsStr := renderProbabilities(qsphereStates, numQubits, width)
+	sb.WriteString(probsStr)
+
+	sb.WriteString("\n")
+	if len(qsphereStates) > 0 {
+		topState := qsphereStates[0]
+		for _, s := range qsphereStates {
+			if s.Prob > topState.Prob {
+				topState = s
+			}
+		}
+		sb.WriteString(dimStyle.Render(fmt.Sprintf("Top state: %s (%.2f%%)  ",
+			formatBasisState(topState.BasisState, numQubits),
+			topState.Prob*100)))
+		sb.WriteString(activeGateStyle.Render(fmt.Sprintf("%d non-zero states", len(qsphereStates))))
+	}
+
+	style := stateStyle
+	if m.focus == focusProbabilities {
+		style = stateActiveStyle
+	}
+	return style.Width(width).Height(height).Render(sb.String())
 }

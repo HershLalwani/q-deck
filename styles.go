@@ -73,4 +73,14 @@ var (
 	cbitConnectorStyle = lipgloss.NewStyle().
 				Foreground(lipgloss.Color("#e0af68")).
 				Bold(true)
+
+	stateStyle = lipgloss.NewStyle().
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(lipgloss.Color("#f7768e")).
+			Padding(1)
+
+	stateActiveStyle = lipgloss.NewStyle().
+				Border(lipgloss.RoundedBorder()).
+				BorderForeground(lipgloss.Color("#ff9e64")).
+				Padding(1)
 )
