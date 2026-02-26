@@ -1,2 +1,8 @@
 *.qasm
 *.exe
+.blackboxcli/
+
+
+# Added by cargo
+
+/target
