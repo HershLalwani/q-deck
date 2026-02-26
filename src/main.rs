@@ -86,8 +86,18 @@ fn run_app<B: ratatui::backend::Backend>(
                             app.focus = Focus::Circuit;
                             app.parse_qasm_input();
                         }
+                        KeyCode::Left => app.qasm_move_left(),
+                        KeyCode::Right => app.qasm_move_right(),
+                        KeyCode::Up => app.qasm_move_up(),
+                        KeyCode::Down => app.qasm_move_down(),
+                        KeyCode::Home => app.qasm_move_home(),
+                        KeyCode::End => app.qasm_move_end(),
                         KeyCode::Backspace => {
                             app.qasm_backspace();
+                            app.parse_qasm_input();
+                        }
+                        KeyCode::Delete => {
+                            app.qasm_delete_forward();
                             app.parse_qasm_input();
                         }
                         KeyCode::Enter => {

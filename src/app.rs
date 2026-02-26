@@ -1,6 +1,6 @@
 use crate::circuit::Gate;
 use crate::dag::CircuitDAG;
-use crate::menu::{is_parameterized_gate, GATE_MENU};
+use crate::menu::is_parameterized_gate;
 use crate::params::{format_param, parse_params};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -37,6 +37,8 @@ pub struct App {
     // QASM editor state
     pub qasm_text: String,
     pub last_qasm: String,
+    pub qasm_cursor: usize,  // byte offset into qasm_text
+    pub qasm_scroll: u16,   // vertical scroll offset (lines)
 
 
     // Menu state
@@ -71,6 +73,8 @@ impl App {
             status_msg: String::new(),
             qasm_text: String::new(),
             last_qasm: String::new(),
+            qasm_cursor: 0,
+            qasm_scroll: 0,
             menu_cat: 0,
             menu_item: 0,
             pending_gate: String::new(),
@@ -90,6 +94,8 @@ impl App {
         let qasm = self.dag.to_qasm();
         self.qasm_text = qasm.clone();
         self.last_qasm = qasm;
+        self.qasm_cursor = self.qasm_text.len();
+        self.qasm_scroll = 0;
     }
 
     pub fn parse_qasm_input(&mut self) {
@@ -328,11 +334,84 @@ impl App {
     }
 
     pub fn qasm_insert_char(&mut self, ch: char) {
-        self.qasm_text.push(ch);
+        self.qasm_text.insert(self.qasm_cursor, ch);
+        self.qasm_cursor += ch.len_utf8();
     }
 
     pub fn qasm_backspace(&mut self) {
-        self.qasm_text.pop();
+        if self.qasm_cursor == 0 { return; }
+        let mut pos = self.qasm_cursor - 1;
+        while pos > 0 && !self.qasm_text.is_char_boundary(pos) { pos -= 1; }
+        self.qasm_text.remove(pos);
+        self.qasm_cursor = pos;
+    }
+
+    pub fn qasm_delete_forward(&mut self) {
+        if self.qasm_cursor >= self.qasm_text.len() { return; }
+        self.qasm_text.remove(self.qasm_cursor);
+    }
+
+    pub fn qasm_cursor_row_col(&self) -> (usize, usize) {
+        let cursor = self.qasm_cursor.min(self.qasm_text.len());
+        let before = &self.qasm_text[..cursor];
+        let row = before.bytes().filter(|&b| b == b'\n').count();
+        let col = match before.rfind('\n') {
+            Some(p) => before.len() - p - 1,
+            None => before.len(),
+        };
+        (row, col)
+    }
+
+    pub fn qasm_move_left(&mut self) {
+        if self.qasm_cursor == 0 { return; }
+        let mut pos = self.qasm_cursor - 1;
+        while pos > 0 && !self.qasm_text.is_char_boundary(pos) { pos -= 1; }
+        self.qasm_cursor = pos;
+    }
+
+    pub fn qasm_move_right(&mut self) {
+        if self.qasm_cursor >= self.qasm_text.len() { return; }
+        let ch = self.qasm_text[self.qasm_cursor..].chars().next().unwrap();
+        self.qasm_cursor += ch.len_utf8();
+    }
+
+    pub fn qasm_move_up(&mut self) {
+        let (row, col) = self.qasm_cursor_row_col();
+        if row == 0 { return; }
+        let lines: Vec<&str> = self.qasm_text.split('\n').collect();
+        let target_col = col.min(lines[row - 1].len());
+        let mut off = 0usize;
+        for r in 0..(row - 1) { off += lines[r].len() + 1; }
+        off += target_col;
+        self.qasm_cursor = off;
+    }
+
+    pub fn qasm_move_down(&mut self) {
+        let (row, col) = self.qasm_cursor_row_col();
+        let lines: Vec<&str> = self.qasm_text.split('\n').collect();
+        if row + 1 >= lines.len() { return; }
+        let target_col = col.min(lines[row + 1].len());
+        let mut off = 0usize;
+        for r in 0..=row { off += lines[r].len() + 1; }
+        off += target_col;
+        self.qasm_cursor = off;
+    }
+
+    pub fn qasm_move_home(&mut self) {
+        let cursor = self.qasm_cursor.min(self.qasm_text.len());
+        let before = &self.qasm_text[..cursor];
+        self.qasm_cursor = match before.rfind('\n') {
+            Some(p) => p + 1,
+            None => 0,
+        };
+    }
+
+    pub fn qasm_move_end(&mut self) {
+        let cursor = self.qasm_cursor.min(self.qasm_text.len());
+        self.qasm_cursor = self.qasm_text[cursor..]
+            .find('\n')
+            .map(|p| cursor + p)
+            .unwrap_or(self.qasm_text.len());
     }
 
     pub fn save_circuit(&mut self) -> Result<(), std::io::Error> {

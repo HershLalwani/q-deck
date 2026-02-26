@@ -1,4 +1,4 @@
-use crate::circuit::{Circuit, Gate};
+use crate::circuit::Circuit;
 use num_complex::Complex;
 use std::f64::consts::PI;
 

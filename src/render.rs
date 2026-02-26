@@ -1,16 +1,14 @@
 use ratatui::{
-    layout::{Alignment, Constraint, Direction, Layout, Rect},
+    layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span, Text},
-    widgets::{Block, Borders, Paragraph, Wrap},
+    widgets::{Block, Borders, Clear, Paragraph, Wrap},
     Frame,
 };
-use std::fmt::Write;
 
 use crate::app::{App, Focus};
 use crate::circuit::{CellInfo, Circuit};
 use crate::menu::GATE_MENU;
-use crate::params::format_param;
 use crate::quantum::simulate_circuit;
 
 // ── Colors ─────────────────────────────────────────────────────────────────
@@ -446,7 +444,7 @@ fn format_basis_state(state: usize, num_qubits: usize) -> String {
 
 // ── QASM Panel ────────────────────────────────────────────────────────────────
 
-fn render_qasm_panel(f: &mut Frame, app: &App, area: Rect) {
+fn render_qasm_panel(f: &mut Frame, app: &mut App, area: Rect) {
     let active = app.focus == Focus::Qasm;
     let border_color = if active { ORANGE } else { PURPLE };
     let title = if active { "QASM Editor [ACTIVE]" } else { "QASM Editor" };
@@ -459,16 +457,52 @@ fn render_qasm_panel(f: &mut Frame, app: &App, area: Rect) {
     let inner = block.inner(area);
     f.render_widget(block, area);
 
-    let text = if active {
-        format!("{}_", app.qasm_text)
-    } else {
-        app.qasm_text.clone()
-    };
+    let inner_h = inner.height as usize;
 
-    let p = Paragraph::new(text)
-        .style(Style::default().fg(DARK_BLUE))
-        .wrap(Wrap { trim: false });
-    f.render_widget(p, inner);
+    if active {
+        let (cursor_row, cursor_col) = app.qasm_cursor_row_col();
+
+        // Keep cursor in view
+        if cursor_row < app.qasm_scroll as usize {
+            app.qasm_scroll = cursor_row as u16;
+        }
+        if inner_h > 0 && cursor_row >= app.qasm_scroll as usize + inner_h {
+            app.qasm_scroll = (cursor_row + 1 - inner_h) as u16;
+        }
+        let scroll = app.qasm_scroll as usize;
+
+        let text_lines: Vec<&str> = app.qasm_text.split('\n').collect();
+        let mut lines: Vec<Line> = Vec::new();
+
+        for (i, line_str) in text_lines.iter().enumerate().skip(scroll).take(inner_h) {
+            if i == cursor_row {
+                let safe_col = cursor_col.min(line_str.len());
+                let before = &line_str[..safe_col];
+                let (cur_ch, after): (&str, &str) = if safe_col < line_str.len() {
+                    let ch = line_str[safe_col..].chars().next().unwrap();
+                    let end = safe_col + ch.len_utf8();
+                    (&line_str[safe_col..end], &line_str[end..])
+                } else {
+                    (" ", "")
+                };
+                lines.push(Line::from(vec![
+                    Span::styled(before, Style::default().fg(DARK_BLUE)),
+                    Span::styled(cur_ch, Style::default().fg(Color::Black).bg(DARK_BLUE)),
+                    Span::styled(after, Style::default().fg(DARK_BLUE)),
+                ]));
+            } else {
+                lines.push(Line::styled(*line_str, Style::default().fg(DARK_BLUE)));
+            }
+        }
+
+        let p = Paragraph::new(Text::from(lines));
+        f.render_widget(p, inner);
+    } else {
+        let p = Paragraph::new(app.qasm_text.as_str())
+            .style(Style::default().fg(DARK_BLUE))
+            .scroll((app.qasm_scroll, 0));
+        f.render_widget(p, inner);
+    }
 }
 
 // ── Controls Panel ─────────────────────────────────────────────────────────────
@@ -494,7 +528,8 @@ fn render_controls_panel(f: &mut Frame, app: &App, area: Rect) {
 // ── Menu Overlay ──────────────────────────────────────────────────────────────
 
 fn render_menu_overlay(f: &mut Frame, app: &App) {
-    let area = overlay_rect(f.area(), 50, 20);
+    let area = overlay_rect(f.area(), 75, 20);
+    f.render_widget(Clear, area);
 
     let block = Block::default()
         .borders(Borders::ALL)
@@ -559,6 +594,7 @@ fn render_menu_overlay(f: &mut Frame, app: &App) {
 
 fn render_param_input_overlay(f: &mut Frame, app: &App) {
     let area = overlay_rect(f.area(), 40, 7);
+    f.render_widget(Clear, area);
 
     let block = Block::default()
         .borders(Borders::ALL)
@@ -583,6 +619,7 @@ fn render_param_input_overlay(f: &mut Frame, app: &App) {
 
 fn render_edit_gate_overlay(f: &mut Frame, app: &App) {
     let area = overlay_rect(f.area(), 40, 12);
+    f.render_widget(Clear, area);
 
     let block = Block::default()
         .borders(Borders::ALL)
