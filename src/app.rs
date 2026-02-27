@@ -6,7 +6,6 @@ use crate::params::{format_param, parse_params};
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Focus {
     Circuit,
-    Probabilities,
     Qasm,
     Menu,
     SelectTarget,

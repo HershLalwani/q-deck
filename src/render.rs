@@ -20,7 +20,6 @@ const ORANGE: Color = Color::Rgb(255, 158, 100);
 const CYAN: Color = Color::Rgb(115, 218, 202);
 const YELLOW: Color = Color::Rgb(224, 175, 104);
 const DIM: Color = Color::Rgb(86, 95, 137);
-const CYAN_LIGHT: Color = Color::Rgb(125, 207, 255);
 const RED: Color = Color::Rgb(247, 118, 142);
 const DARK_BLUE: Color = Color::Rgb(192, 202, 245);
 
@@ -372,13 +371,8 @@ fn pad_center(s: &str, width: usize) -> String {
 // ── State / Probabilities Panel ───────────────────────────────────────────────
 
 fn render_state_panel(f: &mut Frame, app: &App, area: Rect) {
-    let active = app.focus == Focus::Probabilities;
-    let border_color = if active { ORANGE } else { RED };
-    let title = if active {
-        "Probabilities [ACTIVE]"
-    } else {
-        "Probabilities"
-    };
+    let border_color = { RED };
+    let title = "Probabilities";
 
     let block = Block::default()
         .borders(Borders::ALL)
@@ -516,7 +510,6 @@ fn render_controls_panel(f: &mut Frame, app: &App, area: Rect) {
     f.render_widget(block, area);
 
     let help = match app.focus {
-        Focus::Probabilities => "Probabilities:  Tab Next pane  q Quit".to_string(),
         Focus::Qasm => "QASM:  Tab Exit editor  Type to edit  q Quit".to_string(),
         _ => "Nav: ↑↓/jk Qubit  ←→/hl Step  +/- Qubits  a Add gate  Tab Focus  Bksp Del  e Edit  Ctrl+S Save  q Quit".to_string(),
     };

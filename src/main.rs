@@ -75,11 +75,6 @@ fn run_app<B: ratatui::backend::Backend>(
                         return Ok(());
                     }
                 }
-                Focus::Probabilities => {
-                    if let KeyCode::Tab = code {
-                        app.focus = Focus::Qasm;
-                    }
-                }
                 Focus::Qasm => {
                     match code {
                         KeyCode::Tab => {
@@ -130,7 +125,7 @@ fn handle_circuit_keys(app: &mut App, code: KeyCode, mods: KeyModifiers) -> bool
     match code {
         KeyCode::Char('q') => return true,
         KeyCode::Tab => {
-            app.focus = Focus::Probabilities;
+            app.focus = Focus::Qasm;
         }
         KeyCode::Char('s') if mods.contains(KeyModifiers::CONTROL) => {
             match app.save_circuit() {

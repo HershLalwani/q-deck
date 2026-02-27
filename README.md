@@ -1,6 +1,6 @@
 # Q-Deck v0.2.0
 
-TUI application built using [bubbletea](https://github.com/charmbracelet/bubbletea) to build quantum circuits and generate QASM code.
+TUI application built using [ratatui](https://github.com/ratatui/ratatui) to build quantum circuits and generate QASM code.
 
 ## Features (v0.2.0)
 
@@ -24,13 +24,13 @@ TUI application built using [bubbletea](https://github.com/charmbracelet/bubblet
 
 ```bash
 # Build the application
-go build -o q-deck
+cargo build --release
 
 # Run the application
-./q-deck
+cargo run
 
 # Run tests
-go test -v
+cargo test
 ```
 
 ## Controls
