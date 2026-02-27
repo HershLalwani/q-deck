@@ -55,6 +55,9 @@ pub struct App {
     pub edit_menu_idx: usize,
     pub edit_orig_step: isize,
     pub edit_control_idx: isize,
+
+    // State panel view toggle
+    pub show_statevector: bool,
 }
 
 impl App {
@@ -84,6 +87,7 @@ impl App {
             edit_menu_idx: 0,
             edit_orig_step: 0,
             edit_control_idx: -1,
+            show_statevector: false,
         };
         app.sync_from_dag();
         app

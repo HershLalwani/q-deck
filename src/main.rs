@@ -198,6 +198,9 @@ fn handle_circuit_keys(app: &mut App, code: KeyCode, mods: KeyModifiers) -> bool
                 app.focus = Focus::EditGate;
             }
         }
+        KeyCode::Char('v') => {
+            app.show_statevector = !app.show_statevector;
+        }
         _ => {}
     }
     false

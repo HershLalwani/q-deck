@@ -372,7 +372,7 @@ fn pad_center(s: &str, width: usize) -> String {
 
 fn render_state_panel(f: &mut Frame, app: &App, area: Rect) {
     let border_color = { RED };
-    let title = "Probabilities";
+    let title = if app.show_statevector { "Statevector" } else { "Probabilities" };
 
     let block = Block::default()
         .borders(Borders::ALL)
@@ -388,39 +388,77 @@ fn render_state_panel(f: &mut Frame, app: &App, area: Rect) {
     qsphere.sort_by(|a, b| b.prob.partial_cmp(&a.prob).unwrap_or(std::cmp::Ordering::Equal));
 
     let num_qubits = circuit.num_qubits.max(app.dag.num_qubits).max(1);
-    let bar_width = (inner.width as usize).saturating_sub(30).max(10);
-
     let mut text_lines: Vec<Line> = Vec::new();
 
-    let display_count = qsphere.len().min(16);
-    for s in qsphere.iter().take(display_count) {
-        let fill = ((s.prob * bar_width as f64).round() as usize).min(bar_width);
-        let empty = bar_width - fill;
-        let bar = "█".repeat(fill) + &"░".repeat(empty);
-        let state_str = format_basis_state(s.basis_state, num_qubits);
-        let line_str = format!("{}: P={:.2} [{}]", state_str, s.prob, bar);
-        text_lines.push(Line::styled(line_str, Style::default().fg(YELLOW)));
-    }
+    if app.show_statevector {
+        // Statevector view: show complex amplitudes
+        let display_count = qsphere.len().min(16);
+        for s in qsphere.iter().take(display_count) {
+            let state_str = format_basis_state(s.basis_state, num_qubits);
+            let re = s.amplitude.re;
+            let im = s.amplitude.im;
+            let sign = if im >= 0.0 { '+' } else { '-' };
+            let line_str = format!(
+                "{}  α={:+.4}{}{:.4}i  P={:.4}  φ={:.4}",
+                state_str, re, sign, im.abs(), s.prob, s.phase
+            );
+            text_lines.push(Line::styled(line_str, Style::default().fg(CYAN)));
+        }
 
-    if qsphere.len() > 16 {
-        text_lines.push(Line::styled(
-            format!("... and {} more states", qsphere.len() - 16),
-            Style::default().fg(DIM),
-        ));
-    }
+        if qsphere.len() > 16 {
+            text_lines.push(Line::styled(
+                format!("... and {} more states", qsphere.len() - 16),
+                Style::default().fg(DIM),
+            ));
+        }
 
-    // Footer
-    if let Some(top) = qsphere.first() {
-        text_lines.push(Line::default());
-        text_lines.push(Line::styled(
-            format!(
-                "Top: {} ({:.1}%)  {} non-zero",
-                format_basis_state(top.basis_state, num_qubits),
-                top.prob * 100.0,
-                qsphere.len()
-            ),
-            Style::default().fg(DIM),
-        ));
+        // Footer
+        if let Some(top) = qsphere.first() {
+            text_lines.push(Line::default());
+            text_lines.push(Line::styled(
+                format!(
+                    "Top: {} ({:.1}%)  {} non-zero",
+                    format_basis_state(top.basis_state, num_qubits),
+                    top.prob * 100.0,
+                    qsphere.len()
+                ),
+                Style::default().fg(DIM),
+            ));
+        }
+    } else {
+        // Probabilities view: show bar chart
+        let bar_width = (inner.width as usize).saturating_sub(30).max(10);
+
+        let display_count = qsphere.len().min(16);
+        for s in qsphere.iter().take(display_count) {
+            let fill = ((s.prob * bar_width as f64).round() as usize).min(bar_width);
+            let empty = bar_width - fill;
+            let bar = "█".repeat(fill) + &"░".repeat(empty);
+            let state_str = format_basis_state(s.basis_state, num_qubits);
+            let line_str = format!("{}: P={:.2} [{}]", state_str, s.prob, bar);
+            text_lines.push(Line::styled(line_str, Style::default().fg(YELLOW)));
+        }
+
+        if qsphere.len() > 16 {
+            text_lines.push(Line::styled(
+                format!("... and {} more states", qsphere.len() - 16),
+                Style::default().fg(DIM),
+            ));
+        }
+
+        // Footer
+        if let Some(top) = qsphere.first() {
+            text_lines.push(Line::default());
+            text_lines.push(Line::styled(
+                format!(
+                    "Top: {} ({:.1}%)  {} non-zero",
+                    format_basis_state(top.basis_state, num_qubits),
+                    top.prob * 100.0,
+                    qsphere.len()
+                ),
+                Style::default().fg(DIM),
+            ));
+        }
     }
 
     let p = Paragraph::new(Text::from(text_lines)).wrap(Wrap { trim: false });
@@ -511,7 +549,7 @@ fn render_controls_panel(f: &mut Frame, app: &App, area: Rect) {
 
     let help = match app.focus {
         Focus::Qasm => "QASM:  Tab Exit editor  Type to edit  q Quit".to_string(),
-        _ => "Nav: ↑↓/jk Qubit  ←→/hl Step  +/- Qubits  a Add gate  Tab Focus  Bksp Del  e Edit  Ctrl+S Save  q Quit".to_string(),
+        _ => "Nav: ↑↓/jk Qubit  ←→/hl Step  +/- Qubits  a Add gate  Tab Focus  Bksp Del  e Edit  v Statevec  Ctrl+S Save  q Quit".to_string(),
     };
 
     let p = Paragraph::new(Span::styled(help, Style::default().fg(YELLOW)));
