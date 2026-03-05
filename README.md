@@ -1,8 +1,9 @@
-# Q-Deck v0.2.0
+# Q-Deck
+(view roadmap to see current progress and future updates)
 
 TUI application built using [ratatui](https://github.com/ratatui/ratatui) to build quantum circuits and generate QASM code.
 
-## Features (v0.2.0)
+## Features
 
 ### Gate Library
 - **Single Qubit**: H, X, Y, Z, I, S, S†, T, T†, √X (SX), √Y (SY)
