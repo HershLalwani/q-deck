@@ -61,7 +61,9 @@ impl Circuit {
     }
 
     pub fn get_gate_at(&self, step: isize, qubit: usize) -> Option<&Gate> {
-        self.gates.iter().find(|g| g.step == step && g.references(qubit))
+        self.gates
+            .iter()
+            .find(|g| g.step == step && g.references(qubit))
     }
 
     pub fn remove_gate_at(&mut self, step: isize, qubit: usize) {
@@ -78,10 +80,9 @@ impl Circuit {
 
         if let Some(gate) = self.get_gate_at(step, qubit) {
             info.gate = Some(gate.clone());
-            info.is_control = gate.control == qubit as isize
-                || gate.controls.contains(&qubit);
-            info.is_target = gate.target == qubit
-                && (gate.control >= 0 || !gate.controls.is_empty());
+            info.is_control = gate.control == qubit as isize || gate.controls.contains(&qubit);
+            info.is_target =
+                gate.target == qubit && (gate.control >= 0 || !gate.controls.is_empty());
         }
 
         // Check for barrier
@@ -165,4 +166,3 @@ pub struct CellInfo {
     pub measure_below: bool,
     pub is_barrier: bool,
 }
-

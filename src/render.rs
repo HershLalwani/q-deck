@@ -1,9 +1,9 @@
 use ratatui::{
+    Frame,
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span, Text},
     widgets::{Block, Borders, Clear, Paragraph, Wrap},
-    Frame,
 };
 
 use crate::app::{App, Focus};
@@ -40,10 +40,14 @@ pub fn render(f: &mut Frame, app: &mut App) {
     let avail_h = size.height.saturating_sub(ctrl_height);
 
     // Left/Right split
-    let qasm_w = ((size.width / 3) as usize).max(30).min((size.width - 20) as usize) as u16;
+    let qasm_w = ((size.width / 3) as usize)
+        .max(30)
+        .min((size.width - 20) as usize) as u16;
     let left_w = size.width.saturating_sub(qasm_w);
 
-    let state_h = if avail_h < 20 { avail_h / 3 } else { 13 }.max(4).min(avail_h.saturating_sub(3));
+    let state_h = if avail_h < 20 { avail_h / 3 } else { 13 }
+        .max(4)
+        .min(avail_h.saturating_sub(3));
     let circuit_h = avail_h.saturating_sub(state_h).max(1);
 
     // Main layout: [top_row, controls]
@@ -72,7 +76,7 @@ pub fn render(f: &mut Frame, app: &mut App) {
     // Overlays
     match app.focus {
         Focus::Menu => render_menu_overlay(f, app),
-        Focus::InputParam => render_param_input_overlay(f, app),
+        Focus::InputParam | Focus::EditParam => render_param_input_overlay(f, app),
         Focus::EditGate => render_edit_gate_overlay(f, app),
         _ => {}
     }
@@ -83,14 +87,23 @@ pub fn render(f: &mut Frame, app: &mut App) {
 fn render_circuit_panel(f: &mut Frame, app: &App, area: Rect) {
     let active = matches!(
         app.focus,
-        Focus::Circuit | Focus::SelectTarget | Focus::Menu | Focus::SelectControls
+        Focus::Circuit
+            | Focus::SelectTarget
+            | Focus::Menu
+            | Focus::SelectControls
+            | Focus::EditGate
+            | Focus::EditTarget
+            | Focus::EditControl
     );
     let border_color = if active { ORANGE } else { BLUE };
 
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(border_color))
-        .title(Span::styled("Quantum Circuit", Style::default().fg(ORANGE).add_modifier(Modifier::BOLD)));
+        .title(Span::styled(
+            "Quantum Circuit",
+            Style::default().fg(ORANGE).add_modifier(Modifier::BOLD),
+        ));
 
     let inner = block.inner(area);
     f.render_widget(block, area);
@@ -98,13 +111,13 @@ fn render_circuit_panel(f: &mut Frame, app: &App, area: Rect) {
     let circuit = app.circuit();
     let lines = build_circuit_lines(app, &circuit, inner.width as usize);
 
-    let text: Vec<Line> = lines.into_iter().map(|l| Line::raw(l)).collect();
-    let p = Paragraph::new(Text::from(text));
+    let p = Paragraph::new(lines);
     f.render_widget(p, inner);
 }
 
-fn build_circuit_lines(app: &App, circuit: &Circuit, width: usize) -> Vec<String> {
-    let mut lines: Vec<String> = Vec::new();
+fn build_circuit_lines(app: &App, circuit: &Circuit, width: usize) -> Vec<Line<'static>> {
+    let mut lines: Vec<Line<'static>> = Vec::new();
+    let wire_style = Style::default().fg(Color::White);
 
     // Header line
     let avail = width.saturating_sub(LABEL_W + 2);
@@ -117,18 +130,24 @@ fn build_circuit_lines(app: &App, circuit: &Circuit, width: usize) -> Vec<String
     };
 
     // Step numbers header
-    let mut step_hdr = " ".repeat(LABEL_W);
+    let mut step_hdr_spans = vec![Span::styled(" ".repeat(LABEL_W), wire_style)];
     for step in start_step..start_step + max_steps {
-        step_hdr.push_str(&pad_center(&format!("{step}"), CELL_W));
+        step_hdr_spans.push(Span::styled(
+            pad_center(&format!("{step}"), CELL_W),
+            wire_style,
+        ));
     }
-    lines.push(step_hdr);
+    lines.push(Line::from(step_hdr_spans));
 
     // Qubit rows
     for qubit in 0..circuit.num_qubits {
-        let mut top_line = " ".repeat(LABEL_W);
+        let mut top_line_spans = vec![Span::raw(" ".repeat(LABEL_W))];
         let label = format!("q[{qubit}]");
-        let mut mid_line = format!("{:<5}", label) + "──";
-        let mut bot_line = " ".repeat(LABEL_W);
+        let mut mid_line_spans = vec![
+            Span::styled(format!("{:<5}", label), wire_style),
+            Span::styled("──", wire_style),
+        ];
+        let mut bot_line_spans = vec![Span::raw(" ".repeat(LABEL_W))];
 
         for step_idx in start_step..start_step + max_steps {
             let step = step_idx as isize;
@@ -138,214 +157,509 @@ fn build_circuit_lines(app: &App, circuit: &Circuit, width: usize) -> Vec<String
                 && qubit == app.cursor_qubit
                 && matches!(
                     app.focus,
-                    Focus::Circuit | Focus::SelectTarget | Focus::Menu | Focus::SelectControls
+                    Focus::Circuit
+                        | Focus::SelectTarget
+                        | Focus::Menu
+                        | Focus::SelectControls
+                        | Focus::EditGate
                 );
-            let is_target_sel = step == app.cursor_step
+
+            let current_step = if matches!(app.focus, Focus::EditTarget | Focus::EditControl) {
+                app.edit_orig_step
+            } else {
+                app.cursor_step
+            };
+            let is_target_sel = step == current_step
                 && qubit == app.target_qubit
-                && app.focus == Focus::SelectTarget;
+                && matches!(
+                    app.focus,
+                    Focus::SelectTarget
+                        | Focus::SelectControls
+                        | Focus::EditTarget
+                        | Focus::EditControl
+                );
 
             let (top, mid, bot) = render_cell(&info, is_cursor, is_target_sel, qubit);
-            top_line.push_str(&top);
-            mid_line.push_str(&mid);
-            bot_line.push_str(&bot);
+            top_line_spans.extend(top);
+            mid_line_spans.extend(mid);
+            bot_line_spans.extend(bot);
         }
 
-        lines.push(top_line);
-        lines.push(mid_line);
-        lines.push(bot_line);
+        lines.push(Line::from(top_line_spans));
+        lines.push(Line::from(mid_line_spans));
+        lines.push(Line::from(bot_line_spans));
     }
 
     // Classical bit wire
     let num_cbits = circuit.num_cbits();
     if num_cbits > 0 {
-        let mut sep = " ".repeat(LABEL_W);
+        let mut sep_spans = vec![Span::raw(" ".repeat(LABEL_W))];
         for step_idx in start_step..start_step + max_steps {
             let mq = circuit.get_measure_at_step(step_idx as isize);
             if mq >= 0 {
                 let half = CELL_W / 2;
-                sep.push_str(&" ".repeat(half));
-                sep.push('║');
-                sep.push_str(&" ".repeat(CELL_W - half - 1));
+                sep_spans.push(Span::styled(" ".repeat(half), wire_style));
+                sep_spans.push(Span::styled("║", wire_style));
+                sep_spans.push(Span::styled(" ".repeat(CELL_W - half - 1), wire_style));
             } else {
-                sep.push_str(&" ".repeat(CELL_W));
+                sep_spans.push(Span::styled(" ".repeat(CELL_W), wire_style));
             }
         }
-        lines.push(sep);
+        lines.push(Line::from(sep_spans));
 
         let cbit_label = format!("c{num_cbits}");
-        let mut cbit_line = format!("{:<5}", cbit_label) + "══";
+        let mut cbit_line_spans = vec![
+            Span::styled(format!("{:<5}", cbit_label), wire_style),
+            Span::styled("══", wire_style),
+        ];
         for step_idx in start_step..start_step + max_steps {
             let mq = circuit.get_measure_at_step(step_idx as isize);
             if mq >= 0 {
                 let bit_label = format!("{mq}");
                 let dash_l = (CELL_W - 1) / 2;
                 let dash_r = CELL_W.saturating_sub(dash_l + 1 + bit_label.len());
-                cbit_line.push_str(&"═".repeat(dash_l));
-                cbit_line.push_str(&format!("╩{bit_label}"));
-                cbit_line.push_str(&"═".repeat(dash_r));
+                cbit_line_spans.push(Span::styled("═".repeat(dash_l), wire_style));
+                cbit_line_spans.push(Span::styled(format!("╩{bit_label}"), wire_style));
+                cbit_line_spans.push(Span::styled("═".repeat(dash_r), wire_style));
             } else {
-                cbit_line.push_str(&"═".repeat(CELL_W));
+                cbit_line_spans.push(Span::styled("═".repeat(CELL_W), wire_style));
             }
         }
-        lines.push(cbit_line);
+        lines.push(Line::from(cbit_line_spans));
     }
 
     // Status / position line
     match app.focus {
         Focus::SelectTarget => {
-            lines.push(format!(
-                "  {} Select target: q[{}]  ↑↓ Move  Enter Confirm  Esc Cancel",
-                app.pending_gate, app.target_qubit
-            ));
+            lines.push(Line::from(vec![
+                Span::styled(
+                    format!(
+                        "  {} Select target: q[{}]",
+                        app.pending_gate, app.target_qubit
+                    ),
+                    Style::default().fg(YELLOW),
+                ),
+                Span::styled(
+                    "  ↑↓ Move  Enter Confirm  Esc Cancel",
+                    Style::default().fg(DIM),
+                ),
+            ]));
+        }
+        Focus::SelectControls => {
+            lines.push(Line::from(vec![
+                Span::styled(
+                    format!(
+                        "  {} Select control: q[{}]",
+                        app.pending_gate, app.target_qubit
+                    ),
+                    Style::default().fg(YELLOW),
+                ),
+                Span::styled(
+                    "  ↑↓ Move  Enter Next  Esc Cancel",
+                    Style::default().fg(DIM),
+                ),
+            ]));
+        }
+        Focus::EditTarget => {
+            lines.push(Line::from(vec![
+                Span::styled(
+                    format!("  Edit target: q[{}]", app.target_qubit),
+                    Style::default().fg(YELLOW),
+                ),
+                Span::styled(
+                    "  ↑↓ Move  Enter Confirm  Esc Cancel",
+                    Style::default().fg(DIM),
+                ),
+            ]));
+        }
+        Focus::EditControl => {
+            lines.push(Line::from(vec![
+                Span::styled(
+                    format!("  Edit control: q[{}]", app.target_qubit),
+                    Style::default().fg(YELLOW),
+                ),
+                Span::styled(
+                    "  ↑↓ Move  Enter Confirm  Esc Cancel",
+                    Style::default().fg(DIM),
+                ),
+            ]));
         }
         _ => {
-            let mut status = format!("  Position: Step {}, Qubit {}", app.cursor_step, app.cursor_qubit);
+            let mut status_spans = vec![Span::styled(
+                format!(
+                    "  Position: Step {}, Qubit {}",
+                    app.cursor_step, app.cursor_qubit
+                ),
+                Style::default().fg(DIM),
+            )];
             if !app.status_msg.is_empty() {
-                status.push_str(&format!("  │  {}", app.status_msg));
+                status_spans.push(Span::styled(
+                    format!("  │  {}", app.status_msg),
+                    Style::default().fg(YELLOW),
+                ));
             }
-            lines.push(status);
+            lines.push(Line::from(status_spans));
         }
     }
 
     lines
 }
 
-fn render_cell(info: &CellInfo, is_cursor: bool, is_target_sel: bool, qubit: usize) -> (String, String, String) {
-    let empty = " ".repeat(CELL_W);
+fn render_cell(
+    info: &CellInfo,
+    is_cursor: bool,
+    is_target_sel: bool,
+    qubit: usize,
+) -> (Vec<Span<'static>>, Vec<Span<'static>>, Vec<Span<'static>>) {
     let half = CELL_W / 2;
-    let vert_row = " ".repeat(half) + "│" + &" ".repeat(CELL_W - half - 1);
-    let dbl_vert = " ".repeat(half) + "║" + &" ".repeat(CELL_W - half - 1);
+    let dash_l_len = (CELL_W - 1) / 2;
+    let dash_r_len = CELL_W - dash_l_len - 1;
 
-    let dash_l = (CELL_W - 1) / 2;
-    let dash_r = CELL_W - dash_l - 1;
+    let wire_style = Style::default().fg(Color::White);
+    let gate_style = Style::default().fg(BLUE);
+    let measure_style = Style::default().fg(YELLOW);
+
+    let vert_row = vec![
+        Span::styled(" ".repeat(half), wire_style),
+        Span::styled("│", wire_style),
+        Span::styled(" ".repeat(CELL_W - half - 1), wire_style),
+    ];
+    let dbl_vert_row = vec![
+        Span::styled(" ".repeat(half), wire_style),
+        Span::styled("║", wire_style),
+        Span::styled(" ".repeat(CELL_W - half - 1), wire_style),
+    ];
+    let empty_row = vec![Span::styled(" ".repeat(CELL_W), wire_style)];
 
     if is_cursor || is_target_sel {
+        let sel_color = if is_cursor { ORANGE } else { CYAN };
+        let sel_style = Style::default().fg(sel_color);
         let inner_w = CELL_W - 2;
         let dleft = (inner_w - 1) / 2;
         let dright = inner_w - dleft - 1;
-        let bdr_l = if is_cursor { "╔" } else { "╔" };
-        let bdr_r = if is_cursor { "╗" } else { "╗" };
-        let bdr_bl = if is_cursor { "╚" } else { "╚" };
-        let bdr_br = if is_cursor { "╝" } else { "╝" };
 
         if info.is_barrier {
-            let top = vert_row.clone();
-            let mid = "║".to_string() + &"─".repeat(dleft) + "│" + &"─".repeat(dright) + "║";
-            let bot = vert_row.clone();
-            return (top, mid, bot);
+            let mid = vec![
+                Span::styled("║", sel_style),
+                Span::styled("─".repeat(dleft), wire_style),
+                Span::styled("│", wire_style),
+                Span::styled("─".repeat(dright), wire_style),
+                Span::styled("║", sel_style),
+            ];
+            return (vert_row.clone(), mid, vert_row.clone());
         }
 
-        let top = format!("{bdr_l}{}{bdr_r}", "═".repeat(inner_w));
-        let bot = format!("{bdr_bl}{}{bdr_br}", "═".repeat(inner_w));
+        let top = vec![
+            Span::styled("╔", sel_style),
+            Span::styled("═".repeat(inner_w), sel_style),
+            Span::styled("╗", sel_style),
+        ];
+        let bot = vec![
+            Span::styled("╚", sel_style),
+            Span::styled("═".repeat(inner_w), sel_style),
+            Span::styled("╝", sel_style),
+        ];
 
-        let mid = if let Some(gate) = &info.gate {
+        let mut mid = vec![Span::styled("║", sel_style)];
+        if let Some(gate) = &info.gate {
             if info.is_control {
                 let sym = control_symbol(&gate.type_name);
-                format!("║{}{}{}║", "─".repeat(dleft), sym, "─".repeat(dright))
-            } else if info.is_target {
+                mid.push(Span::styled("─".repeat(dleft), wire_style));
+                mid.push(Span::styled(sym, gate_style));
+                mid.push(Span::styled("─".repeat(dright), wire_style));
+            } else if info.is_target && is_symbol_gate(&gate.type_name) {
                 let sym = target_symbol(&gate.type_name);
-                format!("║{}{}{}║", "─".repeat(dleft), sym, "─".repeat(dright))
-            } else if gate.measure_source >= 0 {
-                let sym = if gate.measure_source as usize == qubit { "M" } else { "⊕" };
-                format!("║{}{}{}║", "─".repeat(dleft), sym, "─".repeat(dright))
-            } else {
+                mid.push(Span::styled("─".repeat(dleft), wire_style));
+                mid.push(Span::styled(sym, gate_style));
+                mid.push(Span::styled("─".repeat(dright), wire_style));
+            } else if info.is_target
+                || (gate.measure_source < 0
+                    && gate.type_name != "MEASURE"
+                    && gate.type_name != "BARRIER")
+            {
                 let name = pad_center(&gate_display_name(&gate.type_name), GATE_NAME_W);
-                format!("║─┤{}├─║", name)
+                mid.push(Span::styled("─", wire_style));
+                mid.push(Span::styled("┤", gate_style));
+                mid.push(Span::styled(name, gate_style));
+                mid.push(Span::styled("├", gate_style));
+                mid.push(Span::styled("─", wire_style));
+            } else if gate.measure_source >= 0 {
+                let is_m = gate.measure_source as usize == qubit;
+                let sym = if is_m { "M" } else { "⊕" };
+                let style = if is_m { measure_style } else { gate_style };
+                mid.push(Span::styled("─".repeat(dleft), wire_style));
+                mid.push(Span::styled(sym, style));
+                mid.push(Span::styled("─".repeat(dright), wire_style));
+            } else {
+                mid.push(Span::styled("─".repeat(inner_w), wire_style));
             }
         } else if info.pass_through {
-            format!("║{}┼{}║", "─".repeat(dleft), "─".repeat(dright))
+            mid.push(Span::styled("─".repeat(dleft), wire_style));
+            mid.push(Span::styled("┼", wire_style));
+            mid.push(Span::styled("─".repeat(dright), wire_style));
         } else {
-            format!("║{}║", "─".repeat(inner_w))
-        };
+            mid.push(Span::styled("─".repeat(inner_w), wire_style));
+        }
+        mid.push(Span::styled("║", sel_style));
 
         return (top, mid, bot);
     }
 
     // Normal cells
     if info.is_barrier {
-        let top = vert_row.clone();
-        let mid = "─".repeat(dash_l) + "│" + &"─".repeat(dash_r);
-        let bot = vert_row.clone();
-        return (top, mid, bot);
+        let mid = vec![
+            Span::styled("─".repeat(dash_l_len), wire_style),
+            Span::styled("│", wire_style),
+            Span::styled("─".repeat(dash_r_len), wire_style),
+        ];
+        return (vert_row.clone(), mid, vert_row.clone());
     }
 
     if let Some(gate) = &info.gate {
         if info.is_control {
-            let top = if info.vert_above { vert_row.clone() } else { empty.clone() };
+            let top = if info.vert_above {
+                vert_row.clone()
+            } else {
+                empty_row.clone()
+            };
             let sym = control_symbol(&gate.type_name);
-            let mid = "─".repeat(dash_l) + &sym + &"─".repeat(dash_r);
-            let bot = if info.measure_below { dbl_vert.clone() } else if info.vert_below { vert_row.clone() } else { empty.clone() };
+            let mid = vec![
+                Span::styled("─".repeat(dash_l_len), wire_style),
+                Span::styled(sym, gate_style),
+                Span::styled("─".repeat(dash_r_len), wire_style),
+            ];
+            let bot = if info.measure_below {
+                dbl_vert_row.clone()
+            } else if info.vert_below {
+                vert_row.clone()
+            } else {
+                empty_row.clone()
+            };
             return (top, mid, bot);
         }
         if info.is_target {
-            let top = if info.vert_above { vert_row.clone() } else { empty.clone() };
-            let sym = target_symbol(&gate.type_name);
-            let mid = "─".repeat(dash_l) + &sym + &"─".repeat(dash_r);
-            let bot = if info.measure_below { dbl_vert.clone() } else if info.vert_below { vert_row.clone() } else { empty.clone() };
-            return (top, mid, bot);
+            if is_symbol_gate(&gate.type_name) {
+                let top = if info.vert_above {
+                    vert_row.clone()
+                } else {
+                    empty_row.clone()
+                };
+                let sym = target_symbol(&gate.type_name);
+                let mid = vec![
+                    Span::styled("─".repeat(dash_l_len), wire_style),
+                    Span::styled(sym, gate_style),
+                    Span::styled("─".repeat(dash_r_len), wire_style),
+                ];
+                let bot = if info.measure_below {
+                    dbl_vert_row.clone()
+                } else if info.vert_below {
+                    vert_row.clone()
+                } else {
+                    empty_row.clone()
+                };
+                return (top, mid, bot);
+            } else {
+                // Controlled gate box
+                let margin = (CELL_W - GATE_NAME_W - 2) / 2;
+                let rmargin = CELL_W - margin - GATE_NAME_W - 2;
+                let name = pad_center(&gate_display_name(&gate.type_name), GATE_NAME_W);
+                let top = vec![
+                    Span::styled(" ".repeat(margin), wire_style),
+                    Span::styled(if info.vert_above { "┬" } else { "┌" }, gate_style),
+                    Span::styled("─".repeat(GATE_NAME_W), gate_style),
+                    Span::styled(if info.vert_above { "┬" } else { "┐" }, gate_style),
+                    Span::styled(" ".repeat(rmargin), wire_style),
+                ];
+                let mid = vec![
+                    Span::styled("─".repeat(margin), wire_style),
+                    Span::styled("┤", gate_style),
+                    Span::styled(name, gate_style),
+                    Span::styled("├", gate_style),
+                    Span::styled("─".repeat(rmargin), wire_style),
+                ];
+                let bot = if info.measure_below {
+                    dbl_vert_row.clone()
+                } else {
+                    vec![
+                        Span::styled(" ".repeat(margin), wire_style),
+                        Span::styled(if info.vert_below { "┴" } else { "└" }, gate_style),
+                        Span::styled("─".repeat(GATE_NAME_W), gate_style),
+                        Span::styled(if info.vert_below { "┴" } else { "┘" }, gate_style),
+                        Span::styled(" ".repeat(rmargin), wire_style),
+                    ]
+                };
+                return (top, mid, bot);
+            }
         }
         if gate.measure_source >= 0 {
             let margin = (CELL_W - GATE_NAME_W - 2) / 2;
             let rmargin = CELL_W - margin - GATE_NAME_W - 2;
             if gate.measure_source as usize == qubit {
-                let top = " ".repeat(margin) + "┌" + &"─".repeat(GATE_NAME_W) + "┐" + &" ".repeat(rmargin);
-                let mid = "─".repeat(margin) + "┤" + &pad_center("M", GATE_NAME_W) + "├" + &"─".repeat(rmargin);
-                let bot = if info.measure_below { dbl_vert } else { " ".repeat(margin) + "└" + &"─".repeat(GATE_NAME_W) + "┘" + &" ".repeat(rmargin) };
+                let top = vec![
+                    Span::styled(" ".repeat(margin), wire_style),
+                    Span::styled("┌", measure_style),
+                    Span::styled("─".repeat(GATE_NAME_W), measure_style),
+                    Span::styled("┐", measure_style),
+                    Span::styled(" ".repeat(rmargin), wire_style),
+                ];
+                let mid = vec![
+                    Span::styled("─".repeat(margin), wire_style),
+                    Span::styled("┤", measure_style),
+                    Span::styled(pad_center("M", GATE_NAME_W), measure_style),
+                    Span::styled("├", measure_style),
+                    Span::styled("─".repeat(rmargin), wire_style),
+                ];
+                let bot = if info.measure_below {
+                    dbl_vert_row.clone()
+                } else {
+                    vec![
+                        Span::styled(" ".repeat(margin), wire_style),
+                        Span::styled("└", measure_style),
+                        Span::styled("─".repeat(GATE_NAME_W), measure_style),
+                        Span::styled("┘", measure_style),
+                        Span::styled(" ".repeat(rmargin), wire_style),
+                    ]
+                };
                 return (top, mid, bot);
             } else if gate.target == qubit {
-                let top = if info.vert_above { vert_row.clone() } else { empty.clone() };
-                let mid = "─".repeat(dash_l) + "⊕" + &"─".repeat(dash_r);
-                let bot = if info.measure_below { dbl_vert } else if info.vert_below { vert_row } else { empty };
+                let top = if info.vert_above {
+                    vert_row.clone()
+                } else {
+                    empty_row.clone()
+                };
+                let mid = vec![
+                    Span::styled("─".repeat(dash_l_len), wire_style),
+                    Span::styled("⊕", gate_style),
+                    Span::styled("─".repeat(dash_r_len), wire_style),
+                ];
+                let bot = if info.measure_below {
+                    dbl_vert_row.clone()
+                } else if info.vert_below {
+                    vert_row.clone()
+                } else {
+                    empty_row.clone()
+                };
                 return (top, mid, bot);
             }
         }
         if gate.type_name == "MEASURE" {
             let margin = (CELL_W - GATE_NAME_W - 2) / 2;
             let rmargin = CELL_W - margin - GATE_NAME_W - 2;
-            let top = " ".repeat(margin) + "┌" + &"─".repeat(GATE_NAME_W) + "┐" + &" ".repeat(rmargin);
-            let mid = "─".repeat(margin) + "┤" + &pad_center("M", GATE_NAME_W) + "├" + &"─".repeat(rmargin);
-            let bot = " ".repeat(margin) + "└" + &"─".repeat(GATE_NAME_W) + "┘" + &" ".repeat(rmargin);
+            let top = vec![
+                Span::styled(" ".repeat(margin), wire_style),
+                Span::styled("┌", measure_style),
+                Span::styled("─".repeat(GATE_NAME_W), measure_style),
+                Span::styled("┐", measure_style),
+                Span::styled(" ".repeat(rmargin), wire_style),
+            ];
+            let mid = vec![
+                Span::styled("─".repeat(margin), wire_style),
+                Span::styled("┤", measure_style),
+                Span::styled(pad_center("M", GATE_NAME_W), measure_style),
+                Span::styled("├", measure_style),
+                Span::styled("─".repeat(rmargin), wire_style),
+            ];
+            let bot = vec![
+                Span::styled(" ".repeat(margin), wire_style),
+                Span::styled("└", measure_style),
+                Span::styled("─".repeat(GATE_NAME_W), measure_style),
+                Span::styled("┘", measure_style),
+                Span::styled(" ".repeat(rmargin), wire_style),
+            ];
             return (top, mid, bot);
         }
         // Normal single-qubit gate box
         let margin = (CELL_W - GATE_NAME_W - 2) / 2;
         let rmargin = CELL_W - margin - GATE_NAME_W - 2;
         let name = pad_center(&gate_display_name(&gate.type_name), GATE_NAME_W);
-        let top = " ".repeat(margin) + "┌" + &"─".repeat(GATE_NAME_W) + "┐" + &" ".repeat(rmargin);
-        let mid = "─".repeat(margin) + "┤" + &name + "├" + &"─".repeat(rmargin);
-        let bot = if info.measure_below { dbl_vert } else { " ".repeat(margin) + "└" + &"─".repeat(GATE_NAME_W) + "┘" + &" ".repeat(rmargin) };
+        let top = vec![
+            Span::styled(" ".repeat(margin), wire_style),
+            Span::styled("┌", gate_style),
+            Span::styled("─".repeat(GATE_NAME_W), gate_style),
+            Span::styled("┐", gate_style),
+            Span::styled(" ".repeat(rmargin), wire_style),
+        ];
+        let mid = vec![
+            Span::styled("─".repeat(margin), wire_style),
+            Span::styled("┤", gate_style),
+            Span::styled(name, gate_style),
+            Span::styled("├", gate_style),
+            Span::styled("─".repeat(rmargin), wire_style),
+        ];
+        let bot = if info.measure_below {
+            dbl_vert_row.clone()
+        } else {
+            vec![
+                Span::styled(" ".repeat(margin), wire_style),
+                Span::styled("└", gate_style),
+                Span::styled("─".repeat(GATE_NAME_W), gate_style),
+                Span::styled("┘", gate_style),
+                Span::styled(" ".repeat(rmargin), wire_style),
+            ]
+        };
         return (top, mid, bot);
     }
 
     if info.pass_through {
-        let top = vert_row.clone();
-        let mid = "─".repeat(dash_l) + "┼" + &"─".repeat(dash_r);
-        let bot = if info.measure_below { dbl_vert } else { vert_row };
-        return (top, mid, bot);
+        let mid = vec![
+            Span::styled("─".repeat(dash_l_len), wire_style),
+            Span::styled("┼", wire_style),
+            Span::styled("─".repeat(dash_r_len), wire_style),
+        ];
+        let bot = if info.measure_below {
+            dbl_vert_row.clone()
+        } else {
+            vert_row.clone()
+        };
+        return (vert_row.clone(), mid, bot);
     }
 
     if info.measure_below {
-        let top = if info.vert_above { vert_row } else { dbl_vert.clone() };
-        let mid = "─".repeat(dash_l) + "╫" + &"─".repeat(dash_r);
-        let bot = dbl_vert;
-        return (top, mid, bot);
+        let top = if info.vert_above {
+            vert_row.clone()
+        } else {
+            dbl_vert_row.clone()
+        };
+        let mid = vec![
+            Span::styled("─".repeat(dash_l_len), wire_style),
+            Span::styled("╫", wire_style),
+            Span::styled("─".repeat(dash_r_len), wire_style),
+        ];
+        return (top, mid, dbl_vert_row.clone());
     }
 
     // Empty wire
-    let top = if info.vert_above { vert_row.clone() } else { empty.clone() };
-    let mid = "─".repeat(CELL_W);
-    let bot = if info.vert_below { vert_row.clone() } else { empty };
+    let top = if info.vert_above {
+        vert_row.clone()
+    } else {
+        empty_row.clone()
+    };
+    let mid = vec![Span::styled("─".repeat(CELL_W), wire_style)];
+    let bot = if info.vert_below {
+        vert_row.clone()
+    } else {
+        empty_row.clone()
+    };
     (top, mid, bot)
 }
 
 fn control_symbol(gate_type: &str) -> String {
-    if gate_type == "SWAP" { "×".to_string() } else { "●".to_string() }
+    if gate_type == "SWAP" {
+        "×".to_string()
+    } else {
+        "●".to_string()
+    }
+}
+
+fn is_symbol_gate(gate_type: &str) -> bool {
+    matches!(gate_type, "CX" | "CCX" | "MCX" | "SWAP")
 }
 
 fn target_symbol(gate_type: &str) -> String {
     match gate_type {
         "CZ" => "●".to_string(),
         "SWAP" => "×".to_string(),
+        "CX" | "CCX" | "MCX" => "⊕".to_string(),
         _ => "⊕".to_string(),
     }
 }
@@ -353,7 +667,20 @@ fn target_symbol(gate_type: &str) -> String {
 fn gate_display_name(gate_type: &str) -> String {
     match gate_type {
         "MEASURE" => "M".to_string(),
-        other => other.to_string(),
+        "CX" | "CCX" | "MCX" => "X".to_string(),
+        "CZ" => "Z".to_string(),
+        "CH" => "H".to_string(),
+        "CU1" | "CP" => "U1".to_string(),
+        "CRX" => "RX".to_string(),
+        "CRY" => "RY".to_string(),
+        "CRZ" => "RZ".to_string(),
+        other => {
+            if other.starts_with('C') && other.len() > 1 && other != "CONTROL" {
+                other[1..].to_string()
+            } else {
+                other.to_string()
+            }
+        }
     }
 }
 
@@ -372,12 +699,19 @@ fn pad_center(s: &str, width: usize) -> String {
 
 fn render_state_panel(f: &mut Frame, app: &App, area: Rect) {
     let border_color = { RED };
-    let title = if app.show_statevector { "Statevector" } else { "Probabilities" };
+    let title = if app.show_statevector {
+        "Statevector"
+    } else {
+        "Probabilities"
+    };
 
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(border_color))
-        .title(Span::styled(title, Style::default().fg(ORANGE).add_modifier(Modifier::BOLD)));
+        .title(Span::styled(
+            title,
+            Style::default().fg(ORANGE).add_modifier(Modifier::BOLD),
+        ));
 
     let inner = block.inner(area);
     f.render_widget(block, area);
@@ -385,7 +719,11 @@ fn render_state_panel(f: &mut Frame, app: &App, area: Rect) {
     let circuit = app.circuit();
     let state = simulate_circuit(&circuit, app.cursor_step);
     let mut qsphere = state.get_qsphere_states();
-    qsphere.sort_by(|a, b| b.prob.partial_cmp(&a.prob).unwrap_or(std::cmp::Ordering::Equal));
+    qsphere.sort_by(|a, b| {
+        b.prob
+            .partial_cmp(&a.prob)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
 
     let num_qubits = circuit.num_qubits.max(app.dag.num_qubits).max(1);
     let mut text_lines: Vec<Line> = Vec::new();
@@ -400,7 +738,12 @@ fn render_state_panel(f: &mut Frame, app: &App, area: Rect) {
             let sign = if im >= 0.0 { '+' } else { '-' };
             let line_str = format!(
                 "{}  α={:+.4}{}{:.4}i  P={:.4}  φ={:.4}",
-                state_str, re, sign, im.abs(), s.prob, s.phase
+                state_str,
+                re,
+                sign,
+                im.abs(),
+                s.prob,
+                s.phase
             );
             text_lines.push(Line::styled(line_str, Style::default().fg(CYAN)));
         }
@@ -479,12 +822,24 @@ fn format_basis_state(state: usize, num_qubits: usize) -> String {
 fn render_qasm_panel(f: &mut Frame, app: &mut App, area: Rect) {
     let active = app.focus == Focus::Qasm;
     let border_color = if active { ORANGE } else { PURPLE };
-    let title = if active { "QASM Editor [ACTIVE]" } else { "QASM Editor" };
+    let mut title = if active {
+        "QASM Editor [ACTIVE]"
+    } else {
+        "QASM Editor"
+    }
+    .to_string();
+
+    if !app.qasm_errors.is_empty() {
+        title = format!("{} ({} ERRORS)", title, app.qasm_errors.len());
+    }
 
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(border_color))
-        .title(Span::styled(title, Style::default().fg(ORANGE).add_modifier(Modifier::BOLD)));
+        .title(Span::styled(
+            title,
+            Style::default().fg(ORANGE).add_modifier(Modifier::BOLD),
+        ));
 
     let inner = block.inner(area);
     f.render_widget(block, area);
@@ -507,6 +862,13 @@ fn render_qasm_panel(f: &mut Frame, app: &mut App, area: Rect) {
         let mut lines: Vec<Line> = Vec::new();
 
         for (i, line_str) in text_lines.iter().enumerate().skip(scroll).take(inner_h) {
+            let is_error = app.qasm_errors.iter().any(|(line_idx, _)| *line_idx == i);
+            let base_style = if is_error {
+                Style::default().fg(Color::Red)
+            } else {
+                Style::default().fg(DARK_BLUE)
+            };
+
             if i == cursor_row {
                 let safe_col = cursor_col.min(line_str.len());
                 let before = &line_str[..safe_col];
@@ -518,12 +880,12 @@ fn render_qasm_panel(f: &mut Frame, app: &mut App, area: Rect) {
                     (" ", "")
                 };
                 lines.push(Line::from(vec![
-                    Span::styled(before, Style::default().fg(DARK_BLUE)),
-                    Span::styled(cur_ch, Style::default().fg(Color::Black).bg(DARK_BLUE)),
-                    Span::styled(after, Style::default().fg(DARK_BLUE)),
+                    Span::styled(before, base_style),
+                    Span::styled(cur_ch, Style::default().fg(Color::Black).bg(ORANGE)),
+                    Span::styled(after, base_style),
                 ]));
             } else {
-                lines.push(Line::styled(*line_str, Style::default().fg(DARK_BLUE)));
+                lines.push(Line::styled(*line_str, base_style));
             }
         }
 
@@ -547,10 +909,17 @@ fn render_controls_panel(f: &mut Frame, app: &App, area: Rect) {
     let inner = block.inner(area);
     f.render_widget(block, area);
 
-    let help = match app.focus {
+    let mut help = match app.focus {
         Focus::Qasm => "QASM:  Tab Exit editor  Type to edit  q Quit".to_string(),
         _ => "Nav: ↑↓/jk Qubit  ←→/hl Step  +/- Qubits  a Add gate  Tab Focus  Bksp Del  e Edit  v Statevec  Ctrl+S Save  q Quit".to_string(),
     };
+
+    if app.focus == Focus::Qasm {
+        let (row, _) = app.qasm_cursor_row_col();
+        if let Some((_, msg)) = app.qasm_errors.iter().find(|(r, _)| *r == row) {
+            help = format!("ERROR: {}", msg);
+        }
+    }
 
     let p = Paragraph::new(Span::styled(help, Style::default().fg(YELLOW)));
     f.render_widget(p, inner);
@@ -565,7 +934,10 @@ fn render_menu_overlay(f: &mut Frame, app: &App) {
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(ORANGE))
-        .title(Span::styled("Add Gate", Style::default().fg(ORANGE).add_modifier(Modifier::BOLD)));
+        .title(Span::styled(
+            "Add Gate",
+            Style::default().fg(ORANGE).add_modifier(Modifier::BOLD),
+        ));
 
     let inner = block.inner(area);
     f.render_widget(block, area);
@@ -577,7 +949,10 @@ fn render_menu_overlay(f: &mut Frame, app: &App) {
     for (i, cat) in GATE_MENU.iter().enumerate() {
         let name = format!(" {} ", cat.name);
         if i == app.menu_cat {
-            cat_line.push(Span::styled(name, Style::default().fg(ORANGE).add_modifier(Modifier::BOLD)));
+            cat_line.push(Span::styled(
+                name,
+                Style::default().fg(ORANGE).add_modifier(Modifier::BOLD),
+            ));
         } else {
             cat_line.push(Span::styled(name, Style::default().fg(DIM)));
         }
@@ -593,15 +968,24 @@ fn render_menu_overlay(f: &mut Frame, app: &App) {
     for (i, item) in cat.items.iter().enumerate() {
         let mut spans: Vec<Span> = Vec::new();
         if i == app.menu_item {
-            spans.push(Span::styled(" ▸ ", Style::default().fg(ORANGE).add_modifier(Modifier::BOLD)));
+            spans.push(Span::styled(
+                " ▸ ",
+                Style::default().fg(ORANGE).add_modifier(Modifier::BOLD),
+            ));
             spans.push(Span::styled(
                 format!("{:<18}", item.name),
                 Style::default().fg(ORANGE).add_modifier(Modifier::BOLD),
             ));
-            spans.push(Span::styled(item.symbol, Style::default().fg(CYAN).add_modifier(Modifier::BOLD)));
+            spans.push(Span::styled(
+                item.symbol,
+                Style::default().fg(CYAN).add_modifier(Modifier::BOLD),
+            ));
         } else {
             spans.push(Span::raw("   "));
-            spans.push(Span::styled(format!("{:<18}", item.name), Style::default().fg(DARK_BLUE)));
+            spans.push(Span::styled(
+                format!("{:<18}", item.name),
+                Style::default().fg(DARK_BLUE),
+            ));
             spans.push(Span::styled(item.symbol, Style::default().fg(DIM)));
         }
         if item.needs_target {
@@ -609,13 +993,19 @@ fn render_menu_overlay(f: &mut Frame, app: &App) {
         }
         if item.needs_params {
             if let Some(hint) = &item.param_hint {
-                spans.push(Span::styled(format!(" ({})", hint.example), Style::default().fg(DIM)));
+                spans.push(Span::styled(
+                    format!(" ({})", hint.example),
+                    Style::default().fg(DIM),
+                ));
             }
         }
         lines.push(Line::from(spans));
     }
 
-    lines.push(Line::styled("↑↓ Select  ←→ Cat  ⏎ Ok  Esc ✕", Style::default().fg(DIM)));
+    lines.push(Line::styled(
+        "↑↓ Select  ←→ Cat  ⏎ Ok  Esc ✕",
+        Style::default().fg(DIM),
+    ));
 
     let p = Paragraph::new(Text::from(lines));
     f.render_widget(p, inner);
@@ -630,14 +1020,20 @@ fn render_param_input_overlay(f: &mut Frame, app: &App) {
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(ORANGE))
-        .title(Span::styled("Enter Parameter", Style::default().fg(ORANGE).add_modifier(Modifier::BOLD)));
+        .title(Span::styled(
+            "Enter Parameter",
+            Style::default().fg(ORANGE).add_modifier(Modifier::BOLD),
+        ));
 
     let inner = block.inner(area);
     f.render_widget(block, area);
 
     let lines = vec![
         Line::default(),
-        Line::styled(format!("Value: {}_", app.param_input), Style::default().fg(DARK_BLUE)),
+        Line::styled(
+            format!("Value: {}_", app.param_input),
+            Style::default().fg(DARK_BLUE),
+        ),
         Line::default(),
         Line::styled("Examples: pi/2, 3*pi/4, 1.57", Style::default().fg(DIM)),
     ];
@@ -655,7 +1051,10 @@ fn render_edit_gate_overlay(f: &mut Frame, app: &App) {
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(ORANGE))
-        .title(Span::styled("Edit Gate", Style::default().fg(ORANGE).add_modifier(Modifier::BOLD)));
+        .title(Span::styled(
+            "Edit Gate",
+            Style::default().fg(ORANGE).add_modifier(Modifier::BOLD),
+        ));
 
     let inner = block.inner(area);
     f.render_widget(block, area);
@@ -670,12 +1069,18 @@ fn render_edit_gate_overlay(f: &mut Frame, app: &App) {
                 Style::default().fg(ORANGE).add_modifier(Modifier::BOLD),
             ));
         } else {
-            lines.push(Line::styled(format!("  {}", opt.label), Style::default().fg(DARK_BLUE)));
+            lines.push(Line::styled(
+                format!("  {}", opt.label),
+                Style::default().fg(DARK_BLUE),
+            ));
         }
     }
 
     lines.push(Line::default());
-    lines.push(Line::styled("↑↓ Select  ⏎ Ok  Esc ✕", Style::default().fg(DIM)));
+    lines.push(Line::styled(
+        "↑↓ Select  ⏎ Ok  Esc ✕",
+        Style::default().fg(DIM),
+    ));
 
     let p = Paragraph::new(Text::from(lines));
     f.render_widget(p, inner);

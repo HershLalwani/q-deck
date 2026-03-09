@@ -36,9 +36,9 @@ pub struct App {
     // QASM editor state
     pub qasm_text: String,
     pub last_qasm: String,
-    pub qasm_cursor: usize,  // byte offset into qasm_text
+    pub qasm_cursor: usize, // byte offset into qasm_text
     pub qasm_scroll: u16,   // vertical scroll offset (lines)
-
+    pub qasm_errors: Vec<(usize, String)>,
 
     // Menu state
     pub menu_cat: usize,
@@ -77,6 +77,7 @@ impl App {
             last_qasm: String::new(),
             qasm_cursor: 0,
             qasm_scroll: 0,
+            qasm_errors: vec![],
             menu_cat: 0,
             menu_item: 0,
             pending_gate: String::new(),
@@ -99,15 +100,15 @@ impl App {
         self.last_qasm = qasm;
         self.qasm_cursor = self.qasm_text.len();
         self.qasm_scroll = 0;
+        self.qasm_errors.clear();
     }
 
     pub fn parse_qasm_input(&mut self) {
         if self.qasm_text != self.last_qasm {
             let mut new_dag = CircuitDAG::new();
-            if new_dag.parse_qasm(&self.qasm_text).is_ok() {
-                self.dag = new_dag;
-                self.last_qasm = self.qasm_text.clone();
-            }
+            self.qasm_errors = new_dag.parse_qasm(&self.qasm_text);
+            self.dag = new_dag;
+            self.last_qasm = self.qasm_text.clone();
         }
     }
 
@@ -177,7 +178,8 @@ impl App {
                         Some(self.cursor_qubit),
                     );
                 } else {
-                    self.dag.add_gate(gate_type, tq, self.cursor_step, Some(self.cursor_qubit));
+                    self.dag
+                        .add_gate(gate_type, tq, self.cursor_step, Some(self.cursor_qubit));
                 }
             }
             "CCX" => {
@@ -198,7 +200,8 @@ impl App {
                     .add_measure_control_gate(self.cursor_qubit, tq, self.cursor_step);
             }
             "MEASURE" => {
-                self.dag.add_gate("MEASURE", self.cursor_qubit, self.cursor_step, None);
+                self.dag
+                    .add_gate("MEASURE", self.cursor_qubit, self.cursor_step, None);
             }
             "BARRIER" => {
                 self.dag.add_barrier(self.cursor_step);
@@ -207,7 +210,11 @@ impl App {
                 self.dag.add_reset(self.cursor_qubit, self.cursor_step);
             }
             "RX" | "RY" | "RZ" | "P" | "U1" => {
-                let p = if !params.is_empty() { params } else { vec![0.0] };
+                let p = if !params.is_empty() {
+                    params
+                } else {
+                    vec![0.0]
+                };
                 self.dag.add_parameterized_gate(
                     gate_type,
                     self.cursor_qubit,
@@ -244,7 +251,8 @@ impl App {
             }
             "SDG" | "TDG" => {
                 let base = &gate_type[..gate_type.len() - 2];
-                self.dag.add_dagger_gate(base, self.cursor_qubit, self.cursor_step);
+                self.dag
+                    .add_dagger_gate(base, self.cursor_qubit, self.cursor_step);
             }
             "NOISE_DEPOL" | "NOISE_AMP" | "NOISE_PHASE" => {
                 let noise_type = match gate_type {
@@ -252,7 +260,11 @@ impl App {
                     "NOISE_AMP" => "amplitude_damping",
                     _ => "phase_damping",
                 };
-                let p = if !params.is_empty() { params } else { vec![0.01] };
+                let p = if !params.is_empty() {
+                    params
+                } else {
+                    vec![0.01]
+                };
                 self.dag
                     .add_noise(self.cursor_qubit, self.cursor_step, noise_type, p);
             }
@@ -306,6 +318,12 @@ impl App {
             ctrl_idx: -1,
         });
 
+        opts.push(EditOption {
+            label: "Add control qubit".to_string(),
+            action: "add_control",
+            ctrl_idx: -1,
+        });
+
         if gate.control >= 0 {
             opts.push(EditOption {
                 label: format!("Control: q[{}]", gate.control),
@@ -331,7 +349,10 @@ impl App {
     }
 
     pub fn handle_char_input(&mut self, ch: char) {
-        if matches!(ch, '0'..='9' | '.' | ',' | '-' | 'e' | 'E' | '+' | 'p' | 'i' | '*' | '/') {
+        if matches!(
+            ch,
+            '0'..='9' | '.' | ',' | '-' | 'e' | 'E' | '+' | 'p' | 'i' | '*' | '/'
+        ) {
             self.param_input.push(ch);
         }
     }
@@ -342,15 +363,21 @@ impl App {
     }
 
     pub fn qasm_backspace(&mut self) {
-        if self.qasm_cursor == 0 { return; }
+        if self.qasm_cursor == 0 {
+            return;
+        }
         let mut pos = self.qasm_cursor - 1;
-        while pos > 0 && !self.qasm_text.is_char_boundary(pos) { pos -= 1; }
+        while pos > 0 && !self.qasm_text.is_char_boundary(pos) {
+            pos -= 1;
+        }
         self.qasm_text.remove(pos);
         self.qasm_cursor = pos;
     }
 
     pub fn qasm_delete_forward(&mut self) {
-        if self.qasm_cursor >= self.qasm_text.len() { return; }
+        if self.qasm_cursor >= self.qasm_text.len() {
+            return;
+        }
         self.qasm_text.remove(self.qasm_cursor);
     }
 
@@ -366,25 +393,35 @@ impl App {
     }
 
     pub fn qasm_move_left(&mut self) {
-        if self.qasm_cursor == 0 { return; }
+        if self.qasm_cursor == 0 {
+            return;
+        }
         let mut pos = self.qasm_cursor - 1;
-        while pos > 0 && !self.qasm_text.is_char_boundary(pos) { pos -= 1; }
+        while pos > 0 && !self.qasm_text.is_char_boundary(pos) {
+            pos -= 1;
+        }
         self.qasm_cursor = pos;
     }
 
     pub fn qasm_move_right(&mut self) {
-        if self.qasm_cursor >= self.qasm_text.len() { return; }
+        if self.qasm_cursor >= self.qasm_text.len() {
+            return;
+        }
         let ch = self.qasm_text[self.qasm_cursor..].chars().next().unwrap();
         self.qasm_cursor += ch.len_utf8();
     }
 
     pub fn qasm_move_up(&mut self) {
         let (row, col) = self.qasm_cursor_row_col();
-        if row == 0 { return; }
+        if row == 0 {
+            return;
+        }
         let lines: Vec<&str> = self.qasm_text.split('\n').collect();
         let target_col = col.min(lines[row - 1].len());
         let mut off = 0usize;
-        for r in 0..(row - 1) { off += lines[r].len() + 1; }
+        for r in 0..(row - 1) {
+            off += lines[r].len() + 1;
+        }
         off += target_col;
         self.qasm_cursor = off;
     }
@@ -392,10 +429,14 @@ impl App {
     pub fn qasm_move_down(&mut self) {
         let (row, col) = self.qasm_cursor_row_col();
         let lines: Vec<&str> = self.qasm_text.split('\n').collect();
-        if row + 1 >= lines.len() { return; }
+        if row + 1 >= lines.len() {
+            return;
+        }
         let target_col = col.min(lines[row + 1].len());
         let mut off = 0usize;
-        for r in 0..=row { off += lines[r].len() + 1; }
+        for r in 0..=row {
+            off += lines[r].len() + 1;
+        }
         off += target_col;
         self.qasm_cursor = off;
     }
@@ -423,7 +464,12 @@ impl App {
         Ok(())
     }
 
-    pub fn next_available_target(&self, from: usize, direction: isize, excluded: &[usize]) -> Option<usize> {
+    pub fn next_available_target(
+        &self,
+        from: usize,
+        direction: isize,
+        excluded: &[usize],
+    ) -> Option<usize> {
         let nq = self.dag.num_qubits;
         if direction > 0 {
             for q in (from + 1)..nq {

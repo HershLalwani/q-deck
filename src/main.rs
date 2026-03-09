@@ -1,9 +1,9 @@
+pub mod app;
 pub mod circuit;
 pub mod dag;
 pub mod menu;
 pub mod params;
 pub mod quantum;
-pub mod app;
 pub mod render;
 
 use std::io;
@@ -12,9 +12,9 @@ use std::time::Duration;
 use crossterm::{
     event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyModifiers},
     execute,
-    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
+    terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
-use ratatui::{backend::CrosstermBackend, Terminal};
+use ratatui::{Terminal, backend::CrosstermBackend};
 
 use app::{App, Focus};
 
@@ -75,37 +75,35 @@ fn run_app<B: ratatui::backend::Backend>(
                         return Ok(());
                     }
                 }
-                Focus::Qasm => {
-                    match code {
-                        KeyCode::Tab => {
-                            app.focus = Focus::Circuit;
-                            app.parse_qasm_input();
-                        }
-                        KeyCode::Left => app.qasm_move_left(),
-                        KeyCode::Right => app.qasm_move_right(),
-                        KeyCode::Up => app.qasm_move_up(),
-                        KeyCode::Down => app.qasm_move_down(),
-                        KeyCode::Home => app.qasm_move_home(),
-                        KeyCode::End => app.qasm_move_end(),
-                        KeyCode::Backspace => {
-                            app.qasm_backspace();
-                            app.parse_qasm_input();
-                        }
-                        KeyCode::Delete => {
-                            app.qasm_delete_forward();
-                            app.parse_qasm_input();
-                        }
-                        KeyCode::Enter => {
-                            app.qasm_insert_char('\n');
-                            app.parse_qasm_input();
-                        }
-                        KeyCode::Char(c) => {
-                            app.qasm_insert_char(c);
-                            app.parse_qasm_input();
-                        }
-                        _ => {}
+                Focus::Qasm => match code {
+                    KeyCode::Tab => {
+                        app.focus = Focus::Circuit;
+                        app.parse_qasm_input();
                     }
-                }
+                    KeyCode::Left => app.qasm_move_left(),
+                    KeyCode::Right => app.qasm_move_right(),
+                    KeyCode::Up => app.qasm_move_up(),
+                    KeyCode::Down => app.qasm_move_down(),
+                    KeyCode::Home => app.qasm_move_home(),
+                    KeyCode::End => app.qasm_move_end(),
+                    KeyCode::Backspace => {
+                        app.qasm_backspace();
+                        app.parse_qasm_input();
+                    }
+                    KeyCode::Delete => {
+                        app.qasm_delete_forward();
+                        app.parse_qasm_input();
+                    }
+                    KeyCode::Enter => {
+                        app.qasm_insert_char('\n');
+                        app.parse_qasm_input();
+                    }
+                    KeyCode::Char(c) => {
+                        app.qasm_insert_char(c);
+                        app.parse_qasm_input();
+                    }
+                    _ => {}
+                },
                 Focus::Menu => handle_menu_keys(app, code),
                 Focus::SelectTarget => handle_select_target_keys(app, code),
                 Focus::SelectControls => handle_select_controls_keys(app, code),
@@ -127,12 +125,10 @@ fn handle_circuit_keys(app: &mut App, code: KeyCode, mods: KeyModifiers) -> bool
         KeyCode::Tab => {
             app.focus = Focus::Qasm;
         }
-        KeyCode::Char('s') if mods.contains(KeyModifiers::CONTROL) => {
-            match app.save_circuit() {
-                Ok(()) => app.status_msg = "Saved circuit.qasm".to_string(),
-                Err(e) => app.status_msg = format!("Save error: {e}"),
-            }
-        }
+        KeyCode::Char('s') if mods.contains(KeyModifiers::CONTROL) => match app.save_circuit() {
+            Ok(()) => app.status_msg = "Saved circuit.qasm".to_string(),
+            Err(e) => app.status_msg = format!("Save error: {e}"),
+        },
         KeyCode::Up | KeyCode::Char('k') => {
             if app.cursor_qubit > 0 {
                 app.cursor_qubit -= 1;
@@ -176,12 +172,19 @@ fn handle_circuit_keys(app: &mut App, code: KeyCode, mods: KeyModifiers) -> bool
             app.sync_from_dag();
         }
         KeyCode::Char('e') => {
-            let node = app.dag.get_node_at(app.cursor_step, app.cursor_qubit).cloned();
+            let node = app
+                .dag
+                .get_node_at(app.cursor_step, app.cursor_qubit)
+                .cloned();
             if let Some(node) = node {
                 let gate = crate::circuit::Gate {
                     step: node.step,
                     type_name: node.type_name.clone(),
-                    target: if node.target >= 0 { node.target as usize } else { 0 },
+                    target: if node.target >= 0 {
+                        node.target as usize
+                    } else {
+                        0
+                    },
                     control: node.control,
                     controls: node.controls.clone(),
                     measure_source: node.measure_source,
@@ -373,7 +376,9 @@ fn handle_input_param_keys(app: &mut App, code: KeyCode) {
             // Validate params
             if !app.param_input.is_empty() {
                 if crate::params::parse_params(&app.param_input).is_none() {
-                    app.status_msg = "Invalid parameter — use numbers or pi expressions (e.g. pi/2, 3*pi/4)".to_string();
+                    app.status_msg =
+                        "Invalid parameter — use numbers or pi expressions (e.g. pi/2, 3*pi/4)"
+                            .to_string();
                     return;
                 }
             }
@@ -439,6 +444,23 @@ fn handle_edit_gate_keys(app: &mut App, code: KeyCode) {
                         }
                         app.focus = Focus::EditTarget;
                     }
+                    "add_control" => {
+                        if let Some(g) = &app.edit_gate {
+                            let nq = app.dag.num_qubits;
+                            app.target_qubit = (g.target + 1) % nq;
+                            let mut count = 0;
+                            while g.references(app.target_qubit) && count < nq {
+                                app.target_qubit = (app.target_qubit + 1) % nq;
+                                count += 1;
+                            }
+                            if count < nq {
+                                app.focus = Focus::EditControl;
+                                app.edit_control_idx = -2; // Special value for adding
+                            } else {
+                                app.status_msg = "No more qubits available for control".to_string();
+                            }
+                        }
+                    }
                     "edit_control" => {
                         app.edit_control_idx = ctrl_idx;
                         if let Some(g) = &app.edit_gate {
@@ -488,7 +510,8 @@ fn handle_edit_param_keys(app: &mut App, code: KeyCode) {
                         g.params = params;
                     }
                 } else {
-                    app.status_msg = "Invalid parameter — use numbers or pi expressions".to_string();
+                    app.status_msg =
+                        "Invalid parameter — use numbers or pi expressions".to_string();
                     return;
                 }
             }
@@ -508,23 +531,35 @@ fn handle_edit_target_keys(app: &mut App, code: KeyCode) {
     match code {
         KeyCode::Esc => app.focus = Focus::EditGate,
         KeyCode::Up | KeyCode::Char('k') => {
-            let excluded: Vec<usize> = app.edit_gate.as_ref().map(|g| {
-                let mut v = vec![];
-                if g.control >= 0 { v.push(g.control as usize); }
-                v.extend_from_slice(&g.controls);
-                v
-            }).unwrap_or_default();
+            let excluded: Vec<usize> = app
+                .edit_gate
+                .as_ref()
+                .map(|g| {
+                    let mut v = vec![];
+                    if g.control >= 0 {
+                        v.push(g.control as usize);
+                    }
+                    v.extend_from_slice(&g.controls);
+                    v
+                })
+                .unwrap_or_default();
             if let Some(next) = app.next_available_target(app.target_qubit, -1, &excluded) {
                 app.target_qubit = next;
             }
         }
         KeyCode::Down | KeyCode::Char('j') => {
-            let excluded: Vec<usize> = app.edit_gate.as_ref().map(|g| {
-                let mut v = vec![];
-                if g.control >= 0 { v.push(g.control as usize); }
-                v.extend_from_slice(&g.controls);
-                v
-            }).unwrap_or_default();
+            let excluded: Vec<usize> = app
+                .edit_gate
+                .as_ref()
+                .map(|g| {
+                    let mut v = vec![];
+                    if g.control >= 0 {
+                        v.push(g.control as usize);
+                    }
+                    v.extend_from_slice(&g.controls);
+                    v
+                })
+                .unwrap_or_default();
             if let Some(next) = app.next_available_target(app.target_qubit, 1, &excluded) {
                 app.target_qubit = next;
             }
@@ -543,16 +578,26 @@ fn handle_edit_target_keys(app: &mut App, code: KeyCode) {
 // ── Focus::EditControl ─────────────────────────────────────────────────────────
 
 fn handle_edit_control_keys(app: &mut App, code: KeyCode) {
-    let unavailable: Vec<usize> = app.edit_gate.as_ref().map(|g| {
-        let mut v = vec![g.target];
-        let ci = app.edit_control_idx;
-        for (i, &cq) in g.controls.iter().enumerate() {
-            if i as isize != ci {
-                v.push(cq);
+    let unavailable: Vec<usize> = app
+        .edit_gate
+        .as_ref()
+        .map(|g| {
+            let mut v = vec![g.target];
+            let ci = app.edit_control_idx;
+            // If ci is -2 (adding), all current controls are unavailable
+            // If ci is -1 (editing single control), only multi-controls are unavailable
+            // If ci is >= 0 (editing one of controls), other controls are unavailable
+            if ci != -1 && g.control >= 0 {
+                v.push(g.control as usize);
             }
-        }
-        v
-    }).unwrap_or_default();
+            for (i, &cq) in g.controls.iter().enumerate() {
+                if i as isize != ci {
+                    v.push(cq);
+                }
+            }
+            v
+        })
+        .unwrap_or_default();
 
     match code {
         KeyCode::Esc => app.focus = Focus::EditGate,
@@ -571,6 +616,27 @@ fn handle_edit_control_keys(app: &mut App, code: KeyCode) {
             if let Some(g) = &mut app.edit_gate {
                 if ci == -1 {
                     g.control = app.target_qubit as isize;
+                } else if ci == -2 {
+                    // Adding a NEW control
+                    if g.control >= 0 {
+                        g.controls.push(g.control as usize);
+                        g.control = -1;
+                    }
+                    g.controls.push(app.target_qubit);
+
+                    // Update gate name if it's a standard one
+                    let utype = g.type_name.to_uppercase();
+                    if utype == "X" {
+                        g.type_name = "CX".to_string();
+                    } else if utype == "CX" {
+                        g.type_name = "CCX".to_string();
+                    } else if !utype.starts_with('C')
+                        && utype != "SWAP"
+                        && utype != "MEASURE"
+                        && utype != "BARRIER"
+                    {
+                        g.type_name = format!("C{}", g.type_name);
+                    }
                 } else if (ci as usize) < g.controls.len() {
                     g.controls[ci as usize] = app.target_qubit;
                 }
@@ -591,23 +657,51 @@ fn commit_edit_to_dag(app: &mut App) {
 
         // Re-add with updated values
         if !gate.controls.is_empty() {
-            app.dag.add_multi_control_gate(&gate.type_name, gate.target, app.edit_orig_step, gate.controls.clone());
+            app.dag.add_multi_control_gate(
+                &gate.type_name,
+                gate.target,
+                app.edit_orig_step,
+                gate.controls.clone(),
+            );
         } else if gate.control >= 0 {
             if gate.params.is_empty() {
-                app.dag.add_gate(&gate.type_name, gate.target, app.edit_orig_step, Some(gate.control as usize));
+                app.dag.add_gate(
+                    &gate.type_name,
+                    gate.target,
+                    app.edit_orig_step,
+                    Some(gate.control as usize),
+                );
             } else {
-                app.dag.add_parameterized_gate(&gate.type_name, gate.target, app.edit_orig_step, gate.params.clone(), Some(gate.control as usize));
+                app.dag.add_parameterized_gate(
+                    &gate.type_name,
+                    gate.target,
+                    app.edit_orig_step,
+                    gate.params.clone(),
+                    Some(gate.control as usize),
+                );
             }
         } else if !gate.params.is_empty() {
-            app.dag.add_parameterized_gate(&gate.type_name, gate.target, app.edit_orig_step, gate.params.clone(), None);
+            app.dag.add_parameterized_gate(
+                &gate.type_name,
+                gate.target,
+                app.edit_orig_step,
+                gate.params.clone(),
+                None,
+            );
         } else if gate.is_reset {
             app.dag.add_reset(gate.target, app.edit_orig_step);
         } else if gate.is_dagger {
-            app.dag.add_dagger_gate(&gate.type_name, gate.target, app.edit_orig_step);
+            app.dag
+                .add_dagger_gate(&gate.type_name, gate.target, app.edit_orig_step);
         } else if gate.measure_source >= 0 {
-            app.dag.add_measure_control_gate(gate.measure_source as usize, gate.target, app.edit_orig_step);
+            app.dag.add_measure_control_gate(
+                gate.measure_source as usize,
+                gate.target,
+                app.edit_orig_step,
+            );
         } else {
-            app.dag.add_gate(&gate.type_name, gate.target, app.edit_orig_step, None);
+            app.dag
+                .add_gate(&gate.type_name, gate.target, app.edit_orig_step, None);
         }
 
         // Update edit_gate to reflect the new state
@@ -615,5 +709,3 @@ fn commit_edit_to_dag(app: &mut App) {
         app.sync_from_dag();
     }
 }
-
-

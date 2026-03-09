@@ -42,16 +42,12 @@ fn two_qubit_param_re() -> &'static Regex {
 
 fn three_qubit_re() -> &'static Regex {
     static R: OnceLock<Regex> = OnceLock::new();
-    R.get_or_init(|| {
-        Regex::new(r"^(\w+)\s+q\[(\d+)\],\s*q\[(\d+)\],\s*q\[(\d+)\];?$").unwrap()
-    })
+    R.get_or_init(|| Regex::new(r"^(\w+)\s+q\[(\d+)\],\s*q\[(\d+)\],\s*q\[(\d+)\];?$").unwrap())
 }
 
 fn measure_re() -> &'static Regex {
     static R: OnceLock<Regex> = OnceLock::new();
-    R.get_or_init(|| {
-        Regex::new(r"^measure\s+q\[(\d+)\]\s*->\s*(\w+)\[(\d+)\];?$").unwrap()
-    })
+    R.get_or_init(|| Regex::new(r"^measure\s+q\[(\d+)\]\s*->\s*(\w+)\[(\d+)\];?$").unwrap())
 }
 
 fn reset_re() -> &'static Regex {
@@ -180,7 +176,11 @@ impl CircuitDAG {
 
         // Update qubit count
         let max_qubit = {
-            let mut m = if node.target >= 0 { node.target as usize } else { 0 };
+            let mut m = if node.target >= 0 {
+                node.target as usize
+            } else {
+                0
+            };
             if node.control >= 0 {
                 m = m.max(node.control as usize);
             }
@@ -286,7 +286,11 @@ impl CircuitDAG {
             let gate = Gate {
                 step: node.step,
                 type_name: node.type_name.clone(),
-                target: if node.target >= 0 { node.target as usize } else { 0 },
+                target: if node.target >= 0 {
+                    node.target as usize
+                } else {
+                    0
+                },
                 control: node.control,
                 controls: node.controls.clone(),
                 measure_source: node.measure_source,
@@ -393,10 +397,7 @@ impl CircuitDAG {
                 if node.type_name == "BARRIER" {
                     return false;
                 }
-                if node.control >= 0
-                    || !node.controls.is_empty()
-                    || node.measure_source >= 0
-                {
+                if node.control >= 0 || !node.controls.is_empty() || node.measure_source >= 0 {
                     return false;
                 }
             }
@@ -461,7 +462,13 @@ impl CircuitDAG {
         dep_set.into_keys().collect()
     }
 
-    pub fn add_gate(&mut self, gate_type: &str, target: usize, step: isize, control: Option<usize>) {
+    pub fn add_gate(
+        &mut self,
+        gate_type: &str,
+        target: usize,
+        step: isize,
+        control: Option<usize>,
+    ) {
         let ctrl = control.map(|c| c as isize).unwrap_or(-1);
         let qubits = if ctrl >= 0 {
             vec![target, ctrl as usize]
@@ -582,13 +589,7 @@ impl CircuitDAG {
         });
     }
 
-    pub fn add_noise(
-        &mut self,
-        target: usize,
-        step: isize,
-        noise_type: &str,
-        params: Vec<f64>,
-    ) {
+    pub fn add_noise(&mut self, target: usize, step: isize, noise_type: &str, params: Vec<f64>) {
         let deps = self.build_deps(&[target], step, "NOISE");
         let id = Self::generate_node_id("NOISE", target as isize, step);
         self.add_node(DAGNode {
@@ -644,30 +645,32 @@ impl CircuitDAG {
 
     // ── QASM Parsing ──────────────────────────────────────────────────────────
 
-    pub fn parse_qasm(&mut self, qasm: &str) -> Result<(), String> {
+    pub fn parse_qasm(&mut self, qasm: &str) -> Vec<(usize, String)> {
         self.nodes.clear();
         self.root_nodes.clear();
+        let mut errors = vec![];
 
         let lines: Vec<&str> = qasm.lines().collect();
         let mut creg_map: HashMap<String, usize> = HashMap::new();
         let mut creg_offset: usize = 0;
 
-        let resolve_cbit = |reg_name: &str, bit_idx: &str, creg_map: &HashMap<String, usize>| -> usize {
-            if let Some(&start) = creg_map.get(reg_name) {
-                if !bit_idx.is_empty() {
-                    let offset: usize = bit_idx.parse().unwrap_or(0);
-                    return start + offset;
+        let resolve_cbit =
+            |reg_name: &str, bit_idx: &str, creg_map: &HashMap<String, usize>| -> usize {
+                if let Some(&start) = creg_map.get(reg_name) {
+                    if !bit_idx.is_empty() {
+                        let offset: usize = bit_idx.parse().unwrap_or(0);
+                        return start + offset;
+                    }
+                    return start;
                 }
-                return start;
-            }
-            // fallback: try to parse c[N] style
-            if reg_name.starts_with('c') {
-                if let Ok(idx) = reg_name[1..].parse::<usize>() {
-                    return idx;
+                // fallback: try to parse c[N] style
+                if reg_name.starts_with('c') {
+                    if let Ok(idx) = reg_name[1..].parse::<usize>() {
+                        return idx;
+                    }
                 }
-            }
-            0
-        };
+                0
+            };
 
         let mut last_gate_on_qubit: HashMap<usize, String> = HashMap::new();
         let mut current_step_qubits: HashMap<usize, bool> = HashMap::new();
@@ -692,6 +695,7 @@ impl CircuitDAG {
 
         let mut i = 0;
         while i < lines.len() {
+            let line_idx = i;
             let line = lines[i].trim();
             i += 1;
 
@@ -752,6 +756,8 @@ impl CircuitDAG {
                 if let Some(caps) = qreg_re().captures(line) {
                     let n: usize = caps[2].parse().unwrap_or(0);
                     self.num_qubits = n;
+                } else {
+                    errors.push((line_idx, format!("Invalid qreg declaration: {}", line)));
                 }
                 continue;
             }
@@ -762,18 +768,14 @@ impl CircuitDAG {
                     let reg_size: usize = caps[2].parse().unwrap_or(0);
                     creg_map.insert(reg_name, creg_offset);
                     creg_offset += reg_size;
+                } else {
+                    errors.push((line_idx, format!("Invalid creg declaration: {}", line)));
                 }
                 continue;
             }
 
             // Parse gate line
-            let node_opt = parse_gate_line(
-                line,
-                &lines,
-                &mut i,
-                &creg_map,
-                &resolve_cbit,
-            );
+            let node_opt = parse_gate_line(line, &lines, &mut i, &creg_map, &resolve_cbit);
 
             if let Some(mut node) = node_opt {
                 let qubits_used = get_qubits_used(&node);
@@ -826,10 +828,12 @@ impl CircuitDAG {
                     last_gate_on_qubit.insert(qubit, node_id.clone());
                 }
                 self.add_node(node);
+            } else {
+                errors.push((line_idx, format!("Unrecognized QASM line: {}", line)));
             }
         }
 
-        Ok(())
+        errors
     }
 
     pub fn clone_dag(&self) -> Self {
@@ -854,7 +858,10 @@ fn write_node_qasm(node: &DAGNode, num_qubits: usize) -> String {
                 format_param(node.params[0])
             ));
         } else {
-            s.push_str(&format!("// noise {} q[{}]\n", node.noise_type, node.target));
+            s.push_str(&format!(
+                "// noise {} q[{}]\n",
+                node.noise_type, node.target
+            ));
         }
     } else if node.is_reset {
         s.push_str(&format!("reset q[{}];\n", node.target));
@@ -906,7 +913,10 @@ fn write_node_qasm(node: &DAGNode, num_qubits: usize) -> String {
             node.measure_source, node.target
         ));
     } else if node.type_name == "MEASURE" {
-        s.push_str(&format!("measure q[{}] -> c[{}];\n", node.target, node.target));
+        s.push_str(&format!(
+            "measure q[{}] -> c[{}];\n",
+            node.target, node.target
+        ));
     } else if !node.controls.is_empty() {
         match node.type_name.as_str() {
             "CCX" | "TOFFOLI" if node.controls.len() >= 2 => {
@@ -917,7 +927,8 @@ fn write_node_qasm(node: &DAGNode, num_qubits: usize) -> String {
             }
             _ => {
                 let gate_type = node.type_name.to_lowercase();
-                let ctrl_strs: Vec<String> = node.controls.iter().map(|c| format!("q[{c}]")).collect();
+                let ctrl_strs: Vec<String> =
+                    node.controls.iter().map(|c| format!("q[{c}]")).collect();
                 s.push_str(&format!(
                     "{} {}, q[{}];\n",
                     gate_type,
@@ -1045,7 +1056,11 @@ fn parse_gate_line(
         if *idx < lines.len() {
             let next_line = lines[*idx].trim();
             if let Some(if_caps) = if_re().captures(next_line) {
-                let cond_bit = resolve_cbit(&if_caps[1], if_caps.get(2).map_or("", |m| m.as_str()), creg_map);
+                let cond_bit = resolve_cbit(
+                    &if_caps[1],
+                    if_caps.get(2).map_or("", |m| m.as_str()),
+                    creg_map,
+                );
                 let target: usize = if_caps[5].parse().unwrap_or(0);
                 if cond_bit == cbit {
                     *idx += 1;
