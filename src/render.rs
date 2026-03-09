@@ -84,7 +84,7 @@ pub fn render(f: &mut Frame, app: &mut App) {
 
 // ── Circuit Panel ─────────────────────────────────────────────────────────────
 
-fn render_circuit_panel(f: &mut Frame, app: &App, area: Rect) {
+fn render_circuit_panel(f: &mut Frame, app: &mut App, area: Rect) {
     let active = matches!(
         app.focus,
         Focus::Circuit
@@ -109,19 +109,24 @@ fn render_circuit_panel(f: &mut Frame, app: &App, area: Rect) {
     f.render_widget(block, area);
 
     let circuit = app.circuit();
-    let lines = build_circuit_lines(app, &circuit, inner.width as usize);
+    let lines = build_circuit_lines(app, &circuit, inner.width as usize, inner.height as usize);
 
     let p = Paragraph::new(lines);
     f.render_widget(p, inner);
 }
 
-fn build_circuit_lines(app: &App, circuit: &Circuit, width: usize) -> Vec<Line<'static>> {
+fn build_circuit_lines(
+    app: &mut App,
+    circuit: &Circuit,
+    width: usize,
+    height: usize,
+) -> Vec<Line<'static>> {
     let mut lines: Vec<Line<'static>> = Vec::new();
     let wire_style = Style::default().fg(Color::White);
 
     // Header line
-    let avail = width.saturating_sub(LABEL_W + 2);
-    let max_steps = (avail / CELL_W).max(1);
+    let avail_w = width.saturating_sub(LABEL_W + 2);
+    let max_steps = (avail_w / CELL_W).max(1);
 
     let start_step = if app.cursor_step >= max_steps as isize {
         (app.cursor_step - max_steps as isize + 1) as usize
@@ -139,8 +144,38 @@ fn build_circuit_lines(app: &App, circuit: &Circuit, width: usize) -> Vec<Line<'
     }
     lines.push(Line::from(step_hdr_spans));
 
-    // Qubit rows
-    for qubit in 0..circuit.num_qubits {
+    // Qubit rows (3 lines each)
+    let num_cbits = circuit.num_cbits();
+    let cbit_lines = if num_cbits > 0 { 2 } else { 0 };
+    let status_lines = 1;
+    let header_lines = 1;
+    let avail_h = height.saturating_sub(header_lines + cbit_lines + status_lines);
+    let max_qubits = (avail_h / 3).max(1);
+
+    // Track which qubit is "active" for scrolling purposes
+    let active_qubit = if matches!(
+        app.focus,
+        Focus::SelectTarget
+            | Focus::SelectControls
+            | Focus::EditTarget
+            | Focus::EditControl
+    ) {
+        app.target_qubit
+    } else {
+        app.cursor_qubit
+    };
+
+    // Keep active qubit in view
+    if active_qubit >= app.qubit_scroll + max_qubits {
+        app.qubit_scroll = active_qubit + 1 - max_qubits;
+    } else if active_qubit < app.qubit_scroll {
+        app.qubit_scroll = active_qubit;
+    }
+
+    let start_qubit = app.qubit_scroll;
+    let end_qubit = (start_qubit + max_qubits).min(circuit.num_qubits);
+
+    for qubit in start_qubit..end_qubit {
         let mut top_line_spans = vec![Span::raw(" ".repeat(LABEL_W))];
         let label = format!("q[{qubit}]");
         let mut mid_line_spans = vec![
@@ -229,6 +264,18 @@ fn build_circuit_lines(app: &App, circuit: &Circuit, width: usize) -> Vec<Line<'
     }
 
     // Status / position line
+    let more_above = start_qubit > 0;
+    let more_below = end_qubit < circuit.num_qubits;
+    let scroll_msg = if more_above && more_below {
+        "  (↑↓ More qubits)"
+    } else if more_above {
+        "  (↑ More qubits)"
+    } else if more_below {
+        "  (↓ More qubits)"
+    } else {
+        ""
+    };
+
     match app.focus {
         Focus::SelectTarget => {
             lines.push(Line::from(vec![
@@ -240,7 +287,7 @@ fn build_circuit_lines(app: &App, circuit: &Circuit, width: usize) -> Vec<Line<'
                     Style::default().fg(YELLOW),
                 ),
                 Span::styled(
-                    "  ↑↓ Move  Enter Confirm  Esc Cancel",
+                    format!("  ↑↓ Move  Enter Confirm  Esc Cancel{}", scroll_msg),
                     Style::default().fg(DIM),
                 ),
             ]));
@@ -255,7 +302,7 @@ fn build_circuit_lines(app: &App, circuit: &Circuit, width: usize) -> Vec<Line<'
                     Style::default().fg(YELLOW),
                 ),
                 Span::styled(
-                    "  ↑↓ Move  Enter Next  Esc Cancel",
+                    format!("  ↑↓ Move  Enter Next  Esc Cancel{}", scroll_msg),
                     Style::default().fg(DIM),
                 ),
             ]));
@@ -267,7 +314,7 @@ fn build_circuit_lines(app: &App, circuit: &Circuit, width: usize) -> Vec<Line<'
                     Style::default().fg(YELLOW),
                 ),
                 Span::styled(
-                    "  ↑↓ Move  Enter Confirm  Esc Cancel",
+                    format!("  ↑↓ Move  Enter Confirm  Esc Cancel{}", scroll_msg),
                     Style::default().fg(DIM),
                 ),
             ]));
@@ -279,19 +326,22 @@ fn build_circuit_lines(app: &App, circuit: &Circuit, width: usize) -> Vec<Line<'
                     Style::default().fg(YELLOW),
                 ),
                 Span::styled(
-                    "  ↑↓ Move  Enter Confirm  Esc Cancel",
+                    format!("  ↑↓ Move  Enter Confirm  Esc Cancel{}", scroll_msg),
                     Style::default().fg(DIM),
                 ),
             ]));
         }
         _ => {
-            let mut status_spans = vec![Span::styled(
-                format!(
-                    "  Position: Step {}, Qubit {}",
-                    app.cursor_step, app.cursor_qubit
+            let mut status_spans = vec![
+                Span::styled(
+                    format!(
+                        "  Position: Step {}, Qubit {}",
+                        app.cursor_step, app.cursor_qubit
+                    ),
+                    Style::default().fg(DIM),
                 ),
-                Style::default().fg(DIM),
-            )];
+                Span::styled(scroll_msg, Style::default().fg(DIM)),
+            ];
             if !app.status_msg.is_empty() {
                 status_spans.push(Span::styled(
                     format!("  │  {}", app.status_msg),
