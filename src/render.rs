@@ -1,13 +1,14 @@
 use ratatui::{
-    Frame,
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span, Text},
     widgets::{Block, Borders, Clear, Paragraph, Wrap},
+    Frame,
 };
 
 use crate::app::{App, Focus};
 use crate::circuit::{CellInfo, Circuit};
+use crate::matrix::{compute_circuit_unitary, format_complex};
 use crate::menu::GATE_MENU;
 use crate::quantum::simulate_circuit;
 
@@ -69,7 +70,11 @@ pub fn render(f: &mut Frame, app: &mut App) {
         .split(top_chunks[0]);
 
     render_circuit_panel(f, app, left_chunks[0]);
-    render_state_panel(f, app, left_chunks[1]);
+    if app.show_matrix {
+        render_matrix_panel(f, app, left_chunks[1]);
+    } else {
+        render_state_panel(f, app, left_chunks[1]);
+    }
     render_qasm_panel(f, app, top_chunks[1]);
     render_controls_panel(f, app, main_chunks[1]);
 
@@ -155,10 +160,7 @@ fn build_circuit_lines(
     // Track which qubit is "active" for scrolling purposes
     let active_qubit = if matches!(
         app.focus,
-        Focus::SelectTarget
-            | Focus::SelectControls
-            | Focus::EditTarget
-            | Focus::EditControl
+        Focus::SelectTarget | Focus::SelectControls | Focus::EditTarget | Focus::EditControl
     ) {
         app.target_qubit
     } else {
@@ -867,6 +869,215 @@ fn format_basis_state(state: usize, num_qubits: usize) -> String {
     s
 }
 
+// ── Matrix Panel ──────────────────────────────────────────────────────────────
+
+fn render_matrix_panel(f: &mut Frame, app: &mut App, area: Rect) {
+    let border_color = RED;
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(border_color))
+        .title(Span::styled(
+            "Circuit Matrix (Unitary)",
+            Style::default().fg(ORANGE).add_modifier(Modifier::BOLD),
+        ));
+
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+
+    let circuit = app.circuit();
+    let num_qubits = circuit.num_qubits.max(app.dag.num_qubits).max(1);
+
+    if num_qubits > 6 {
+        let lines = vec![
+            Line::default(),
+            Line::styled(
+                "  Matrix view limited to 6 qubits (64x64)",
+                Style::default().fg(YELLOW),
+            ),
+            Line::styled(
+                format!("  Current circuit has {} qubits", num_qubits),
+                Style::default().fg(DIM),
+            ),
+            Line::default(),
+            Line::styled(
+                "  Press m to return to state view",
+                Style::default().fg(DIM),
+            ),
+        ];
+        let p = Paragraph::new(Text::from(lines));
+        f.render_widget(p, inner);
+        return;
+    }
+
+    let unitary = compute_circuit_unitary(&circuit, app.cursor_step);
+
+    match unitary {
+        None => {
+            let lines = vec![
+                Line::default(),
+                Line::styled(
+                    "  Could not compute circuit matrix",
+                    Style::default().fg(YELLOW),
+                ),
+            ];
+            let p = Paragraph::new(Text::from(lines));
+            f.render_widget(p, inner);
+        }
+        Some(matrix) => {
+            let dim = matrix.dim;
+            let inner_h = inner.height as usize;
+            let inner_w = inner.width as usize;
+
+            // Build a bit-reversal permutation so that q[0] (top of circuit)
+            // maps to the leftmost bit in the ket labels, matching textbook convention.
+            let bit_reverse = |idx: usize, nq: usize| -> usize {
+                let mut result = 0;
+                for b in 0..nq {
+                    if (idx >> b) & 1 == 1 {
+                        result |= 1 << (nq - 1 - b);
+                    }
+                }
+                result
+            };
+
+            // Determine column width based on available space
+            let label_w = num_qubits + 3; // "|01⟩" width
+            let col_w = if inner_w > 0 {
+                // Each column: value + spacing
+                let avail = inner_w.saturating_sub(label_w + 2);
+                let max_cols = dim;
+                let ideal = avail / max_cols;
+                ideal.clamp(6, 10)
+            } else {
+                8
+            };
+
+            let visible_cols = ((inner_w.saturating_sub(label_w + 2)) / col_w).min(dim);
+
+            let mut text_lines: Vec<Line> = Vec::new();
+
+            // Header row with column labels
+            let mut header_spans: Vec<Span> = vec![Span::styled(
+                " ".repeat(label_w + 1),
+                Style::default().fg(DIM),
+            )];
+            for c in 0..visible_cols {
+                let col_label = format_basis_ket(c, num_qubits);
+                header_spans.push(Span::styled(
+                    pad_to_width(&col_label, col_w),
+                    Style::default().fg(PURPLE).add_modifier(Modifier::BOLD),
+                ));
+            }
+            if visible_cols < dim {
+                header_spans.push(Span::styled("...", Style::default().fg(DIM)));
+            }
+            text_lines.push(Line::from(header_spans));
+
+            // Clamp scroll
+            let max_scroll = dim.saturating_sub(inner_h.saturating_sub(3));
+            if app.matrix_scroll > max_scroll {
+                app.matrix_scroll = max_scroll;
+            }
+
+            // Matrix rows
+            let visible_rows = (inner_h.saturating_sub(3)).min(dim); // -1 header, -1 footer, -1 buffer
+            let start_row = app.matrix_scroll;
+            let end_row = (start_row + visible_rows).min(dim);
+
+            for r in start_row..end_row {
+                let row_label = format_basis_bra(r, num_qubits);
+                let mut row_spans: Vec<Span> = vec![Span::styled(
+                    format!("{} ", pad_to_width(&row_label, label_w)),
+                    Style::default().fg(PURPLE).add_modifier(Modifier::BOLD),
+                )];
+
+                // Map display row/col to internal indices via bit-reversal
+                let internal_r = bit_reverse(r, num_qubits);
+                for c in 0..visible_cols {
+                    let internal_c = bit_reverse(c, num_qubits);
+                    let val = matrix.data[internal_r][internal_c];
+                    let formatted = format_complex(val);
+                    let color = if val.norm_sqr() < 1e-20 {
+                        DIM
+                    } else if (val.im.abs()) < 1e-10 {
+                        GREEN
+                    } else if (val.re.abs()) < 1e-10 {
+                        CYAN
+                    } else {
+                        DARK_BLUE
+                    };
+                    row_spans.push(Span::styled(
+                        pad_to_width(&formatted, col_w),
+                        Style::default().fg(color),
+                    ));
+                }
+
+                if visible_cols < dim {
+                    row_spans.push(Span::styled("...", Style::default().fg(DIM)));
+                }
+
+                text_lines.push(Line::from(row_spans));
+            }
+
+            // Footer
+            if dim > visible_rows || dim > visible_cols {
+                text_lines.push(Line::default());
+                let footer = format!(
+                    "  {}x{} unitary  (showing rows {}-{}, {} cols)  Step {}",
+                    dim,
+                    dim,
+                    start_row,
+                    end_row.saturating_sub(1),
+                    visible_cols.min(dim),
+                    app.cursor_step
+                );
+                text_lines.push(Line::styled(footer, Style::default().fg(DIM)));
+            } else {
+                text_lines.push(Line::default());
+                text_lines.push(Line::styled(
+                    format!("  {}x{} unitary at step {}", dim, dim, app.cursor_step),
+                    Style::default().fg(DIM),
+                ));
+            }
+
+            let p = Paragraph::new(Text::from(text_lines));
+            f.render_widget(p, inner);
+        }
+    }
+}
+
+fn format_basis_ket(state: usize, num_qubits: usize) -> String {
+    let mut s = String::from("|");
+    for i in (0..num_qubits).rev() {
+        s.push(if state & (1 << i) != 0 { '1' } else { '0' });
+    }
+    s.push('⟩');
+    s
+}
+
+fn format_basis_bra(state: usize, num_qubits: usize) -> String {
+    let mut s = String::from("⟨");
+    for i in (0..num_qubits).rev() {
+        s.push(if state & (1 << i) != 0 { '1' } else { '0' });
+    }
+    s.push('|');
+    s
+}
+
+fn pad_to_width(s: &str, width: usize) -> String {
+    let len = s.chars().count();
+    if len >= width {
+        s.chars().take(width).collect()
+    } else {
+        let mut out = s.to_string();
+        for _ in 0..(width - len) {
+            out.push(' ');
+        }
+        out
+    }
+}
+
 // ── QASM Panel ────────────────────────────────────────────────────────────────
 
 fn render_qasm_panel(f: &mut Frame, app: &mut App, area: Rect) {
@@ -961,7 +1172,7 @@ fn render_controls_panel(f: &mut Frame, app: &App, area: Rect) {
 
     let mut help = match app.focus {
         Focus::Qasm => "QASM:  Tab Exit editor  Type to edit  q Quit".to_string(),
-        _ => "Nav: ↑↓/jk Qubit  ←→/hl Step  +/- Qubits  a Add gate  Tab Focus  Bksp Del  e Edit  v Statevec  Ctrl+S Save  q Quit".to_string(),
+        _ => "Nav: ↑↓/jk Qubit  ←→/hl Step  +/- Qubits  a Add gate  Tab Focus  Bksp Del  e Edit  v Statevec  m Matrix  Ctrl+S Save  q Quit".to_string(),
     };
 
     if app.focus == Focus::Qasm {

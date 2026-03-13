@@ -1,6 +1,7 @@
 pub mod app;
 pub mod circuit;
 pub mod dag;
+pub mod matrix;
 pub mod menu;
 pub mod params;
 pub mod quantum;
@@ -12,9 +13,9 @@ use std::time::Duration;
 use crossterm::{
     event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyModifiers},
     execute,
-    terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
+    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
-use ratatui::{Terminal, backend::CrosstermBackend};
+use ratatui::{backend::CrosstermBackend, Terminal};
 
 use app::{App, Focus};
 
@@ -203,6 +204,10 @@ fn handle_circuit_keys(app: &mut App, code: KeyCode, mods: KeyModifiers) -> bool
         }
         KeyCode::Char('v') => {
             app.show_statevector = !app.show_statevector;
+        }
+        KeyCode::Char('m') => {
+            app.show_matrix = !app.show_matrix;
+            app.matrix_scroll = 0;
         }
         _ => {}
     }

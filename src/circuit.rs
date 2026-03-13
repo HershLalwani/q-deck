@@ -42,7 +42,11 @@ impl Circuit {
                 max = max.max(g.measure_source);
             }
         }
-        if max < 0 { 0 } else { max as usize + 1 }
+        if max < 0 {
+            0
+        } else {
+            max as usize + 1
+        }
     }
 
     pub fn get_measure_at_step(&self, step: isize) -> isize {

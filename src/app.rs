@@ -59,6 +59,10 @@ pub struct App {
 
     // State panel view toggle
     pub show_statevector: bool,
+
+    // Matrix view toggle
+    pub show_matrix: bool,
+    pub matrix_scroll: usize,
 }
 
 impl App {
@@ -91,6 +95,8 @@ impl App {
             edit_orig_step: 0,
             edit_control_idx: -1,
             show_statevector: false,
+            show_matrix: false,
+            matrix_scroll: 0,
         };
         app.sync_from_dag();
         app
